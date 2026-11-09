@@ -207,15 +207,3 @@ python3 -m unittest discover -v
 Os testes usam bancos temporários e cobrem estabilização, limite de alerta, retiradas e reposições, ruído no limite de arredondamento, tara/calibração, amostra conhecida, falhas, recipiente ausente, comandos duplicados e persistência após reiniciar. O contrato HTTP é exercitado com o parser real e streams em memória, sem abrir portas. Os testes MQTT usam o adaptador da aplicação, um cliente em memória e o núcleo C++ real para verificar envio de comandos, confirmação assíncrona, timeout, sessão, deduplicação, mensagens fora de ordem, dados retidos, erro de publicação e separação dos históricos. Não comprovam disponibilidade de broker público ou funcionamento da biblioteca Paho em uma conexão real.
 
 O núcleo compila com `-Wall -Wextra -Werror`. O usuário validou a execução da versão offline no Wokwi, incluindo leitura e tara, e o histórico do dashboard local. **A nova versão com Wi-Fi/MQTT precisa de compilação e execução no Wokwi e de conexão real com o backend.** O ambiente do agente bloqueia sockets e não conseguiu instalar Paho; por isso não foi possível fazer esse teste de rede nem inspeção visual da nova tela. Não houve teste físico com HX711.
-
-## Próximas etapas
-
-1. Validar a conexão MQTT implementada com um broker acessível no notebook e no Wokwi.
-2. Executar os cenários de tara, configuração, retirada, reposição e perda de conexão usando o dashboard e o ESP32 conectados.
-3. Avaliar persistência de parâmetros no ESP32 e uma fila durável de eventos durante desconexões.
-4. Definir regras de observação do consumo e calcular autonomia. Hoje, ela permanece como **Sem consumo registrado** ou **Dados insuficientes**, sem gerar previsão artificial.
-5. Validar todos os cenários da entrega de **16/11** com a comunicação real.
-6. Preparar relatório e orientação escrita para o pitch por último, conforme combinado.
-7. Na etapa física, implementar e testar o adaptador HX711, a persistência do ESP32 e a calibração real.
-
-As decisões estão em [docs/architecture.md](docs/architecture.md). O [plano original](docs/stockWeight.md) permanece preservado.
