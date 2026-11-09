@@ -1,4 +1,4 @@
-# StockWeight
+# stockWeight
 
 Controle de estoque por pesagem para pequenos almoxarifados, oficinas e laboratórios. O objetivo é reduzir contagens manuais e antecipar a reposição de materiais padronizados, começando com parafusos.
 
