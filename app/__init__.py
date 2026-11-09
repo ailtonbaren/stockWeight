@@ -1,0 +1,1 @@
+"""StockWeight local application."""

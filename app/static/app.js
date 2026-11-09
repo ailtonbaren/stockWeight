@@ -1,0 +1,284 @@
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const format = (value, digits = 0) => value == null ? "—" : Number(value).toLocaleString("pt-BR", {minimumFractionDigits: digits, maximumFractionDigits: digits});
+const gram = (value) => value == null ? "—" : `${format(value, 1)} g`;
+const time = (value) => value ? new Date(value).toLocaleTimeString("pt-BR") : "—";
+let current = null;
+let refreshing = false;
+let busy = false;
+let initialized = false;
+let feedbackTimer;
+let sliderTimer;
+
+async function request(path, body) {
+  const response = await fetch(path, body === undefined ? {cache: "no-store"} : {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || result.message || "Não foi possível concluir a operação.");
+  return result;
+}
+
+function feedback(message, failure = false, persistent = false) {
+  clearTimeout(feedbackTimer);
+  $("feedback").textContent = message;
+  $("feedback").classList.toggle("failure", failure);
+  $("feedback").hidden = false;
+  if (!persistent) feedbackTimer = setTimeout(() => { $("feedback").hidden = true; }, 5500);
+}
+
+function controls() {
+  const online = Boolean(current?.connected) && !busy;
+  const stable = online && Boolean(current?.telemetry?.stable);
+  $("tare-button").disabled = !stable;
+  document.querySelectorAll("[data-command-control]").forEach((button) => { button.disabled = !online; });
+  document.querySelectorAll("[data-stable-control]").forEach((button) => { button.disabled = !stable; });
+}
+
+async function sendCommand(command, value) {
+  if (busy) return;
+  busy = true;
+  controls();
+  try {
+    if (current?.mode === "mqtt") feedback("Enviando comando. Aguardando confirmação do ESP32…", false, true);
+    const result = await request("/api/command", {command, value, command_id: crypto.randomUUID()});
+    feedback(result.message);
+    // Reflect the acknowledged configuration, including a unit derived from a sample.
+    if (command === "sample_unit") $("unit").dataset.dirty = "false";
+    if (command === "unit") $("unit").dataset.dirty = "false";
+    if (command === "minimum") $("minimum").dataset.dirty = "false";
+    await refresh();
+  } catch (error) {
+    feedback(error.message, true);
+  } finally {
+    busy = false;
+    controls();
+  }
+}
+
+async function simulation(change) {
+  if (current?.mode === "mqtt") return;
+  try {
+    await request("/api/simulation", change);
+    await refresh();
+  } catch (error) {
+    feedback(error.message, true);
+    await refresh();
+  }
+}
+
+function inputValue(id, value) {
+  const input = $(id);
+  if (document.activeElement !== input && input.dataset.dirty !== "true") input.value = value;
+}
+
+function render(data) {
+  current = data;
+  const reading = data.telemetry;
+  const online = data.connected;
+  const mqttMode = data.mode === "mqtt";
+  $("connection").textContent = mqttMode ? (online ? "ESP32 conectado" : data.mqtt_connected ? "Aguardando ESP32" : "Broker desconectado") : (online ? "Simulador local ativo" : "Simulador desconectado");
+  $("connection").className = `pill ${online ? "normal" : "neutral"}`;
+  $("last-reading").textContent = time(data.last_reading_at);
+  $("server-error").hidden = !data.error;
+  $("server-error").textContent = data.error || "";
+  $("history-warning").hidden = !data.history_warning;
+  $("history-warning").textContent = data.history_warning || "";
+  $("mode-title").textContent = mqttMode ? "ESP32 via MQTT." : "Modo de teste local.";
+  $("mode-description").textContent = mqttMode ? "As leituras vêm do Wokwi. Os comandos são enviados ao ESP32 e precisam da confirmação do dispositivo." : "Os controles abaixo alimentam um simulador com a lógica do firmware. O ESP32 no Wokwi ainda não está conectado.";
+  $("mode-tag").textContent = mqttMode ? (data.mqtt_connected ? "Broker conectado" : "Aguardando broker") : "Teste sem broker";
+  $("local-controls").hidden = mqttMode;
+  $("mqtt-controls").hidden = !mqttMode;
+  $("stage-title").textContent = mqttMode ? "Etapa 02" : "Etapa 01";
+  $("stage-description").textContent = mqttMode ? "Integração Wokwi e dashboard" : "Simulação e validação local";
+  $("source-eyebrow").textContent = mqttMode ? "DISPOSITIVO REMOTO" : "BANCADA VIRTUAL";
+  $("simulation-title").textContent = mqttMode ? "ESP32 no Wokwi" : "Balança de teste";
+  if (mqttMode) {
+    $("mqtt-host").textContent = `${data.mqtt.host}:${data.mqtt.port}`;
+    $("mqtt-topic").textContent = data.mqtt.topic;
+    $("device-state").textContent = online ? "Recebendo leituras do ESP32" : "Aguardando uma leitura recente do ESP32";
+  }
+  $("pause").textContent = data.simulation.connected ? "Pausar conexão" : "Reconectar simulador";
+  $("fault").checked = data.simulation.fault;
+  if (!initialized && !mqttMode) {
+    $("mass").value = data.simulation.mass_g;
+    $("mass-slider").value = data.simulation.mass_g;
+    initialized = true;
+  }
+  if (reading) {
+    const settings = reading.settings;
+    const quantity = online ? reading.quantity : null;
+    const stable = online && reading.stable;
+    let status = "Estoque normal", style = "normal", hint = "Quantidade confirmada após estabilização da leitura.";
+    if (!online) {
+      status = "Sem conexão"; style = "neutral"; hint = "A última leitura foi preservada. Reconecte para atualizar o estoque.";
+    } else if (!reading.valid) {
+      status = "Falha de leitura"; style = "alert"; hint = "Leitura inválida. O histórico não registra movimentações durante a falha.";
+    } else if (!reading.container_present) {
+      status = "Recipiente ausente"; style = "neutral"; hint = "Massa abaixo da tara. Aguardando o retorno do recipiente.";
+    } else if (!stable) {
+      status = "Estabilizando"; style = "neutral"; hint = "Aguarde cerca de 1 segundo. Oscilações não geram movimentações.";
+    } else if (reading.alert) {
+      status = "Repor estoque"; style = "alert"; hint = "A quantidade está igual ou abaixo do estoque mínimo.";
+    }
+    $("quantity").textContent = format(quantity);
+    $("stock-status").textContent = status;
+    $("stock-status").className = `pill ${style}`;
+    $("stock-hint").textContent = hint;
+    $("stability").textContent = stable ? "● Leitura estável" : "○ Leitura não confirmada";
+    $("minimum-label").textContent = `${format(settings.minimum)} peças`;
+    $("unit-label").textContent = `${format(settings.unit_g, 2)} g`;
+    $("net").textContent = online ? format(reading.net_g, 1) : "—";
+    $("gross").textContent = online ? gram(reading.gross_g) : "—";
+    $("tare").textContent = gram(reading.tare_g);
+    $("stock-meter").max = Math.max(settings.minimum * 2, quantity || 0, 1);
+    $("stock-meter").value = quantity || 0;
+    $("virtual-led").classList.toggle("on", online && reading.alert === true);
+    $("virtual-led").setAttribute("aria-label", online && reading.alert ? "LED de alerta aceso" : "LED de alerta desligado");
+    inputValue("unit", settings.unit_g);
+    inputValue("minimum", settings.minimum);
+    $("calibration-status").textContent = settings.calibrated ? "Escala calibrada com massa de referência." : "Escala nominal, sem calibração de referência.";
+  } else {
+    for (const id of ["quantity", "net", "gross", "tare", "unit-label", "minimum-label"]) $(id).textContent = "—";
+    $("stock-status").textContent = "Aguardando leitura";
+    $("stock-status").className = "pill neutral";
+    $("stability").textContent = "○ Leitura não confirmada";
+    $("stock-hint").textContent = mqttMode ? "Inicie a simulação no Wokwi e aguarde uma leitura recente." : "Aguarde uma leitura estável para confirmar o estoque.";
+    $("stock-meter").value = 0;
+    $("virtual-led").classList.remove("on");
+    $("virtual-led").setAttribute("aria-label", "LED sem leitura disponível");
+  }
+  $("autonomy").textContent = data.autonomy.status === "no_consumption" ? "Sem consumo registrado" : "Dados insuficientes";
+  $("consumed").textContent = format(data.autonomy.consumed_pieces);
+  renderHistory(data.events);
+  drawChart(data.readings, reading?.settings.minimum || 0);
+  controls();
+}
+
+function renderHistory(events) {
+  const body = $("events");
+  body.replaceChildren();
+  if (!events.length) {
+    const row = body.insertRow();
+    const cell = row.insertCell();
+    cell.colSpan = 4; cell.className = "empty";
+    cell.textContent = "Aguardando a primeira medição estável.";
+    return;
+  }
+  const labels = {initial: "Estoque inicial", adjustment: "Ajuste de medição", withdrawal: "Retirada", restock: "Reposição"};
+  for (const event of events) {
+    const row = body.insertRow();
+    row.insertCell().textContent = new Date(event.received_at).toLocaleString("pt-BR");
+    const tag = document.createElement("span");
+    tag.className = `event-tag ${event.kind}`;
+    tag.textContent = labels[event.kind] || event.kind;
+    row.insertCell().append(tag);
+    const delta = row.insertCell();
+    delta.textContent = ["initial", "adjustment"].includes(event.kind) ? "—" : `${event.delta > 0 ? "+" : ""}${format(event.delta)}`;
+    delta.className = event.delta < 0 ? "delta-negative" : event.delta > 0 ? "delta-positive" : "";
+    row.insertCell().textContent = `${format(event.quantity)} peças`;
+  }
+}
+
+function drawChart(readings, minimum) {
+  const canvas = $("stock-chart");
+  const rectangle = canvas.getBoundingClientRect();
+  const width = rectangle.width, height = rectangle.height;
+  if (!width || !height) return;
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  const context = canvas.getContext("2d");
+  context.scale(ratio, ratio);
+  const stable = readings.filter((point) => point.stable && point.quantity != null);
+  $("chart-empty").hidden = stable.length < 2;
+  const left = 40, right = width - 16, top = 12, bottom = height - 24;
+  const maximum = Math.max(20, Math.ceil(Math.max(minimum, ...stable.map((p) => p.quantity)) / 20) * 20);
+  const y = (value) => bottom - value / maximum * (bottom - top);
+  context.font = "9px system-ui";
+  for (let step = 0; step <= 2; step++) {
+    const value = Math.round(maximum * step / 2);
+    context.strokeStyle = "#edf0e7";
+    context.beginPath(); context.moveTo(left, y(value)); context.lineTo(right, y(value)); context.stroke();
+    context.fillStyle = "#9aa18f"; context.fillText(format(value), 0, y(value) + 3);
+  }
+  if (stable.length < 2) return;
+  const firstTime = Date.parse(readings[0].received_at);
+  const duration = Math.max(1000, Date.parse(readings.at(-1).received_at) - firstTime);
+  const x = (point) => left + (Date.parse(point.received_at) - firstTime) / duration * (right - left);
+  context.setLineDash([4, 4]); context.strokeStyle = "#d8a381";
+  context.beginPath(); context.moveTo(left, y(minimum)); context.lineTo(right, y(minimum)); context.stroke();
+  context.setLineDash([]); context.strokeStyle = "#78965d"; context.lineWidth = 2;
+  context.beginPath();
+  let drawing = false;
+  for (const point of readings) {
+    if (!point.stable || point.quantity == null) { drawing = false; continue; }
+    if (!drawing) context.moveTo(x(point), y(point.quantity));
+    else context.lineTo(x(point), y(point.quantity));
+    drawing = true;
+  }
+  context.stroke();
+  context.fillStyle = "#8d9781";
+  context.fillText(time(readings[0].received_at), left, height - 3);
+  const lastLabel = time(readings.at(-1).received_at);
+  context.fillText(lastLabel, right - context.measureText(lastLabel).width, height - 3);
+  canvas.setAttribute("aria-label", `Histórico recente. Última quantidade estável: ${stable.at(-1).quantity} peças. Estoque mínimo: ${minimum} peças.`);
+}
+
+async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
+  try {
+    render(await request("/api/state"));
+  } catch (error) {
+    $("connection").textContent = "Servidor local indisponível";
+    $("connection").className = "pill alert";
+    $("server-error").hidden = false;
+    $("server-error").textContent = "Não foi possível atualizar o painel. Verifique se o servidor está em execução no terminal.";
+    if (current) current.connected = false;
+    for (const id of ["quantity", "net", "gross"]) $(id).textContent = "—";
+    $("stock-status").textContent = "Sem conexão";
+    $("stock-status").className = "pill neutral";
+    $("virtual-led").classList.remove("on");
+    controls();
+  } finally {
+    refreshing = false;
+  }
+}
+
+$("mass-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  clearTimeout(sliderTimer);
+  $("mass-slider").value = $("mass").value;
+  simulation({mass_g: Number($("mass").value)});
+});
+$("mass-slider").addEventListener("input", (event) => {
+  $("mass").value = event.target.value;
+  clearTimeout(sliderTimer);
+  sliderTimer = setTimeout(() => simulation({mass_g: Number(event.target.value)}), 180);
+});
+document.querySelectorAll("[data-mass]").forEach((button) => button.addEventListener("click", () => {
+  clearTimeout(sliderTimer);
+  const mass = Number(button.dataset.mass);
+  $("mass").value = $("mass-slider").value = mass;
+  simulation({mass_g: mass});
+}));
+$("fault").addEventListener("change", (event) => simulation({fault: event.target.checked}));
+$("pause").addEventListener("click", () => current && simulation({connected: !current.simulation.connected}));
+$("tare-button").addEventListener("click", () => sendCommand("tare"));
+for (const [form, input, command] of [
+  ["unit-form", "unit", "unit"], ["minimum-form", "minimum", "minimum"],
+  ["sample-form", "sample-count", "sample_unit"], ["calibration-form", "reference", "calibrate"],
+]) {
+  $(form).addEventListener("submit", (event) => { event.preventDefault(); sendCommand(command, Number($(input).value)); });
+}
+for (const id of ["unit", "minimum"]) $(id).addEventListener("input", () => { $(id).dataset.dirty = "true"; });
+document.querySelectorAll("nav a").forEach((link) => link.addEventListener("click", () => {
+  document.querySelectorAll("nav a").forEach((item) => item.classList.toggle("nav-active", item === link));
+}));
+window.addEventListener("resize", () => current && drawChart(current.readings, current.telemetry?.settings.minimum || 0));
+(async function poll() {
+  await refresh();
+  setTimeout(poll, 500);
+})();

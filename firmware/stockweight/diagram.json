@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "author": "StockWeight",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-potentiometer", "id": "mass", "top": -5, "left": -180, "attrs": { "value": "20" } },
+    { "type": "wokwi-led", "id": "alert", "top": -50, "left": 220, "attrs": { "color": "red", "label": "REPOR ESTOQUE" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 45, "left": 210, "attrs": { "value": "220" } },
+    { "type": "wokwi-pushbutton", "id": "fault", "top": 150, "left": 210, "attrs": { "color": "red", "label": "SIMULAR FALHA", "bounce": "0" } }
+  ],
+  "connections": [
+    ["esp:TX", "$serialMonitor:RX", "", []],
+    ["esp:RX", "$serialMonitor:TX", "", []],
+    ["mass:VCC", "esp:3V3", "red", []],
+    ["mass:GND", "esp:GND.1", "black", []],
+    ["mass:SIG", "esp:34", "green", []],
+    ["esp:26", "r1:1", "green", []],
+    ["r1:2", "alert:A", "green", []],
+    ["alert:C", "esp:GND.2", "black", []],
+    ["esp:27", "fault:1.l", "orange", []],
+    ["fault:2.l", "esp:GND.2", "black", []]
+  ],
+  "serialMonitor": { "display": "always", "newline": "lf" }
+}
