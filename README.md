@@ -236,3 +236,5 @@ Os testes usam bancos temporários e cobrem estabilização, limite de alerta, r
 Os testes de autonomia usam relógio controlado para verificar 24 horas mínimas, janela de 7 dias, dias sem consumo, interrupções, persistência, deduplicação e mudanças de referência. O contrato HTTP verifica também que consultar o exemplo não altera nenhuma tabela do banco nem o estado monitorado.
 
 O núcleo compila com `-Wall -Wextra -Werror`. O usuário validou a execução no Wokwi, o histórico do dashboard local e a conexão MQTT real usando a internet do celular. O ambiente do agente bloqueia sockets; os testes automatizados usam transporte em memória e não substituem essa validação de rede. A nova previsão foi verificada com relógio controlado, sem aguardar 24 horas reais. Não houve teste físico com HX711 nem inspeção visual desta atualização do painel.
+
+test
