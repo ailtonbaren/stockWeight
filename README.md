@@ -2,7 +2,7 @@
 
 Controle de estoque por pesagem para pequenos almoxarifados, oficinas e laboratórios. O objetivo é reduzir contagens manuais e antecipar a reposição de materiais padronizados, começando com parafusos.
 
-O dashboard tem dois modos: **simulador local**, sem broker, e **MQTT**, para receber leituras e enviar comandos ao ESP32 no Wokwi. A integração MQTT está implementada e testada com um cliente em memória; a conexão real com o broker e a execução do novo firmware MQTT no Wokwi ainda precisam ser verificadas. O usuário já confirmou o funcionamento da versão offline no Wokwi, incluindo leitura e tara, e do dashboard local.
+O dashboard tem dois modos: **simulador local**, sem broker, e **MQTT**, para receber leituras e enviar comandos ao ESP32 no Wokwi. O usuário confirmou o funcionamento da integração completa usando a internet compartilhada do celular, após dificuldades de conexão na rede da faculdade. O painel também calcula a autonomia do estoque e oferece um histórico fictício separado para demonstrar essa previsão.
 
 ## Conectar Wokwi e dashboard por MQTT
 
@@ -140,6 +140,31 @@ O firmware calcula `gramas_por_unidade_bruta = massa_de_referência / (leitura_b
 - **Massa abaixo da tara:** mostra recipiente ausente e preserva o último estoque confirmado. Ao recolocar o recipiente, registra apenas a diferença líquida entre estados estáveis. É uma proteção inicial; a regra definitiva para retirada do recipiente ainda será acordada.
 - **Alterações rápidas de massa:** só produzem eventos após uma janela estável de dez amostras. Uma pausa longa com massa estável pode ser interpretada como uma movimentação concluída.
 
+## Autonomia do estoque
+
+A previsão considera uma janela móvel dos **últimos 7 dias corridos** (7 × 24 horas, incluindo fins de semana) e exige pelo menos **24 horas de acompanhamento confiável** dentro dessa janela. As horas acompanhadas podem ser acumuladas em vários intervalos; períodos sem comunicação ou com leitura inválida são excluídos, sem serem tratados como consumo zero. Horas acompanhadas sem retiradas entram no cálculo normalmente.
+
+```text
+consumo médio diário = peças retiradas / (horas acompanhadas / 24)
+autonomia em dias = quantidade atual / consumo médio diário
+```
+
+Somente eventos de **retirada** entram no consumo. Reposições aumentam o estoque atual; estoque inicial, tara, calibração e ajustes não contam como retiradas. A previsão pressupõe que o consumo médio observado se mantenha; não é uma garantia de duração do estoque.
+
+- **Dados insuficientes:** ainda não há 24 horas acompanhadas na referência atual, dentro dos últimos 7 dias.
+- **Sem consumo registrado:** já há tempo suficiente, mas nenhuma retirada; não se apresenta autonomia infinita.
+- **Aguardando leitura válida:** previsão suspensa durante desconexão, falha, instabilidade ou ausência do recipiente. Os intervalos já acompanhados permanecem salvos.
+
+Uma nova referência começa quando o dispositivo reinicia, muda a tara, a massa unitária ou a calibração, registra um ajuste, ou quando é detectada perda de eventos. Alterar apenas o estoque mínimo preserva a referência. Reiniciar somente o servidor preserva os intervalos conhecidos do mesmo dispositivo e sessão, mas exclui o período desligado e a movimentação recebida na recuperação. Retiradas cuja atribuição ao período acompanhado não seja confiável ficam fora da média. O histórico de movimentações continua preservado mesmo quando a referência da previsão muda.
+
+A contagem começa a partir das leituras recebidas por esta versão; o histórico antigo não permite reconstruir períodos de acompanhamento confiável. Os registros para a previsão ficam no SQLite, separados da lista de até 100 eventos exibida no painel. O cálculo roda no Python; esta funcionalidade não exige atualizar o firmware no Wokwi.
+
+### Exemplo para demonstrar a previsão
+
+Abra **Histórico de exemplo · demonstração da autonomia** no dashboard. Essa seção usa o arquivo `examples/autonomy-history.json` e a mesma função de cálculo do estoque monitorado. Seus dados são fictícios, não alteram o banco, não enviam comandos e não substituem os indicadores do dispositivo.
+
+O exemplo começa com 160 peças. Ao longo de 3 dias acompanhados, ocorrem retiradas de 20, 30 e 10 peças e uma reposição de 100 peças. O estoque final é 200 peças; o consumo médio é `60 / 3 = 20 peças/dia` e a autonomia é `200 / 20 = 10 dias`. Assim é possível demonstrar a previsão sem aguardar dias reais nem acelerar o relógio da aplicação.
+
 ## ESP32 no Wokwi, sem MQTT
 
 Prepare uma versão com apenas dois arquivos para facilitar a cópia:
@@ -192,7 +217,9 @@ simulator/main.cpp     adaptação nativa do mesmo núcleo C++
 app/server.py          API local, processo simulado e SQLite
 app/mqtt_transport.py  cliente Paho, assinaturas e validação da telemetria
 app/mqtt_config.py     configuração compartilhada do broker e tópicos
+app/autonomy.py        períodos acompanhados e previsão de autonomia
 app/static/            dashboard HTML/CSS/JS, sem CDN
+examples/              histórico fictício isolado para demonstrar a previsão
 scripts/               compilação, preparação do Wokwi e diagnóstico MQTT
 tests/                 testes do núcleo, persistência e contrato HTTP
 docs/                  plano original e decisões da arquitetura
@@ -206,4 +233,6 @@ python3 -m unittest discover -v
 
 Os testes usam bancos temporários e cobrem estabilização, limite de alerta, retiradas e reposições, ruído no limite de arredondamento, tara/calibração, amostra conhecida, falhas, recipiente ausente, comandos duplicados e persistência após reiniciar. O contrato HTTP é exercitado com o parser real e streams em memória, sem abrir portas. Os testes MQTT usam o adaptador da aplicação, um cliente em memória e o núcleo C++ real para verificar envio de comandos, confirmação assíncrona, timeout, sessão, deduplicação, mensagens fora de ordem, dados retidos, erro de publicação e separação dos históricos. Não comprovam disponibilidade de broker público ou funcionamento da biblioteca Paho em uma conexão real.
 
-O núcleo compila com `-Wall -Wextra -Werror`. O usuário validou a execução da versão offline no Wokwi, incluindo leitura e tara, e o histórico do dashboard local. **A nova versão com Wi-Fi/MQTT precisa de compilação e execução no Wokwi e de conexão real com o backend.** O ambiente do agente bloqueia sockets e não conseguiu instalar Paho; por isso não foi possível fazer esse teste de rede nem inspeção visual da nova tela. Não houve teste físico com HX711.
+Os testes de autonomia usam relógio controlado para verificar 24 horas mínimas, janela de 7 dias, dias sem consumo, interrupções, persistência, deduplicação e mudanças de referência. O contrato HTTP verifica também que consultar o exemplo não altera nenhuma tabela do banco nem o estado monitorado.
+
+O núcleo compila com `-Wall -Wextra -Werror`. O usuário validou a execução no Wokwi, o histórico do dashboard local e a conexão MQTT real usando a internet do celular. O ambiente do agente bloqueia sockets; os testes automatizados usam transporte em memória e não substituem essa validação de rede. A nova previsão foi verificada com relógio controlado, sem aguardar 24 horas reais. Não houve teste físico com HX711 nem inspeção visual desta atualização do painel.

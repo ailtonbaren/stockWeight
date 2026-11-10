@@ -47,9 +47,9 @@
       </article>
       <article class="card autonomy-card">
         <div class="card-top"><span class="eyebrow">AUTONOMIA ESTIMADA</span><span aria-hidden="true" class="card-symbol">◷</span></div>
-        <div class="autonomy-value" id="autonomy">Sem consumo<br>registrado</div>
-        <p class="muted small">A previsão depende de um histórico de consumo em um período conhecido.</p>
-        <div class="consumption"><strong id="consumed">0</strong><span>peças retiradas nesta sessão<br><small>desde o último ajuste</small></span></div>
+        <div class="autonomy-value" id="autonomy">Aguardando leitura</div>
+        <p id="autonomy-detail" class="muted small">São necessárias pelo menos 24 horas de acompanhamento.</p>
+        <div class="consumption"><strong id="consumed">0</strong><span>peças retiradas no período<br><small>janela dos últimos 7 dias corridos</small></span></div>
       </article>
     </section>
 
@@ -82,6 +82,25 @@
         <details><summary>Calibrar com uma massa conhecida <span aria-hidden="true">+</span></summary><p class="small muted">Tare o recipiente vazio, coloque uma massa de referência e informe apenas a massa adicionada. Esta calibração ajusta a escala simulada.</p><form id="calibration-form"><label for="reference">Massa de referência <span>(g)</span></label><div class="input-action"><input id="reference" type="number" min="0.01" max="5000" step="any" value="500" required><button type="submit" class="button outline" data-stable-control>Calibrar</button></div></form><p id="calibration-status" class="small muted">Escala nominal, sem calibração de referência.</p></details>
       </section>
     </div>
+
+    <details id="autonomy-example" class="card autonomy-example">
+      <summary>Histórico de exemplo · demonstração da autonomia <span aria-hidden="true">+</span></summary>
+      <p class="muted small">Dados fictícios, separados do estoque monitorado. Este exemplo não altera a balança nem o seu histórico.</p>
+      <div id="example-error" class="error-banner" role="alert" hidden></div>
+      <p id="example-loading" class="muted small">Carregando exemplo…</p>
+      <div id="example-content" hidden>
+        <div class="example-metrics">
+          <div><span>Estoque final</span><strong id="example-stock">—</strong></div>
+          <div><span>Tempo acompanhado</span><strong id="example-period">—</strong></div>
+          <div><span>Retiradas no período</span><strong id="example-consumed">—</strong></div>
+          <div><span>Média diária</span><strong id="example-rate">—</strong></div>
+          <div><span>Autonomia estimada</span><strong id="example-days">—</strong></div>
+        </div>
+        <p id="example-formula" class="small example-formula"></p>
+        <div class="table-scroll"><table><caption class="sr-only">Movimentações fictícias do exemplo de autonomia</caption><thead><tr><th>Tempo desde o início</th><th>Movimentação</th><th>Variação</th><th>Estoque resultante</th></tr></thead><tbody id="example-events"></tbody></table></div>
+        <p class="muted small">A reposição de 100 peças aumenta o estoque disponível. Apenas as retiradas entram na média de consumo. A previsão pressupõe que essa média se mantenha.</p>
+      </div>
+    </details>
 
     <section id="history" class="card history-card" aria-labelledby="history-title">
       <div class="section-title"><div><span class="eyebrow">CADA MOVIMENTAÇÃO CONTA</span><h2 id="history-title">Histórico do estoque</h2></div><span class="saved-label"><span aria-hidden="true">●</span> Salvo neste notebook</span></div>

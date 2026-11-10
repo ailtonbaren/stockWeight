@@ -18,12 +18,13 @@ import uuid
 from scripts.build_simulator import ROOT, build
 from app.mqtt_config import DEFAULT_CONFIG, MqttConfig, load_config
 from app.mqtt_transport import MqttTransport, validate_telemetry
+from app.autonomy import AutonomyTracker, example_history
 
 STATIC = ROOT / "app/static"
 
 
-def timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+def timestamp(value=None) -> str:
+    return datetime.fromtimestamp(time.time() if value is None else value, timezone.utc).isoformat(timespec="milliseconds")
 
 
 def number(value, low: float, high: float, *, integer: bool = False):
@@ -37,10 +38,11 @@ def number(value, low: float, high: float, *, integer: bool = False):
 class Application:
     def __init__(self, database: Path, *, background: bool = True,
                  mode: str = "local_simulator", mqtt_config: MqttConfig | None = None,
-                 transport_factory=MqttTransport, command_timeout: float = 8):
+                 transport_factory=MqttTransport, command_timeout: float = 8, clock=None):
         if mode not in {"local_simulator", "mqtt"}:
             raise ValueError("Modo de execução inválido.")
         self.mode = mode
+        self.clock = clock or time.time
         self.mqtt_config = mqtt_config if mode == "mqtt" else None
         if mode == "mqtt" and mqtt_config is None:
             raise ValueError("Informe a configuração MQTT.")
@@ -85,6 +87,8 @@ class Application:
                 fingerprint TEXT NOT NULL, acknowledgement TEXT NOT NULL
             );
         """)
+        scope = "mqtt:" + mqtt_config.topic if mode == "mqtt" else "local_simulator"
+        self.autonomy = AutonomyTracker(self.db, scope, max_gap=5 if mode == "mqtt" else 3, clock=self.clock)
         self.simulation = self._load("simulation", {"mass_g": 100.0, "fault": False, "connected": True})
         if mode == "mqtt":
             # An interrupted request must not be executed again on server restart.
@@ -140,8 +144,10 @@ class Application:
         return json.loads(response)
 
     def _accept(self, telemetry):
+        now = self.clock()
+        self.autonomy.observe(telemetry, now)
         self.latest = telemetry
-        self.received_at = timestamp()
+        self.received_at = timestamp(now)
         self.received_monotonic = time.monotonic()
         event = telemetry["event"]
         if event:
@@ -177,6 +183,8 @@ class Application:
             if not connected:
                 # A new live reading is needed after reconnecting to the broker.
                 self.received_monotonic = 0
+                self.autonomy.pause()
+                self.db.commit()
 
     def receive_mqtt(self, kind, message):
         with self.lock:
@@ -224,6 +232,8 @@ class Application:
             elif kind == "availability":
                 if message.get("device_id") == self.mqtt_config.device_id and message.get("session_id") == self.session and message.get("online") is False:
                     self.device_available = False
+                    self.autonomy.pause()
+                    self.db.commit()
 
     def tick(self, *, milliseconds=None):
         with self.lock:
@@ -260,6 +270,8 @@ class Application:
                         raise ValueError("Falha e conexão devem ser valores booleanos.")
                     updated[field] = body[field]
             self.simulation = updated
+            if not updated["connected"]:
+                self.autonomy.pause()
             self._save("simulation", updated)
             self.db.commit()
             self.tick()
@@ -365,21 +377,9 @@ class Application:
             }
 
     def _autonomy(self):
-        # Only this running session is observed continuously. Restarts and gaps
-        # cannot be silently treated as zero consumption.
-        elapsed = time.monotonic() - self.started
-        last_adjustment = self.db.execute(
-            "SELECT MAX(id) FROM events WHERE session_id = ? AND kind = 'adjustment'", (self.storage_session(),)
-        ).fetchone()[0] or 0
-        row = self.db.execute(
-            "SELECT COALESCE(SUM(-delta), 0) AS consumed FROM events WHERE session_id = ? AND id > ? AND kind = 'withdrawal'",
-            (self.storage_session(), last_adjustment),
-        ).fetchone()
-        consumed = row["consumed"]
-        # Stage 1 exposes an honest empty state. A later observation-window
-        # service must account for uptime, adjustments and disconnections.
-        return {"days": None, "daily_consumption": None, "consumed_pieces": consumed,
-                "observed_seconds": int(elapsed), "status": "insufficient_data" if consumed else "no_consumption"}
+        reading = self.latest or {}
+        available = self.connected() and reading.get("valid") and reading.get("stable") and reading.get("container_present")
+        return self.autonomy.summary(reading.get("quantity"), available=bool(available))
 
     def close(self):
         self.stop.set()
@@ -388,6 +388,8 @@ class Application:
         if self.thread:
             self.thread.join(timeout=2)
         with self.lock:
+            self.autonomy.pause()
+            self.db.commit()
             for pending in self.pending.values():
                 pending["event"].set()
             if self.process and self.process.poll() is None:
@@ -416,6 +418,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/api/state":
             self.send_json(200, self.server.application.state())
+            return
+        if path == "/api/autonomy/example":
+            self.send_json(200, example_history())
             return
         files = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
                  "/styles.css": ("styles.css", "text/css")}

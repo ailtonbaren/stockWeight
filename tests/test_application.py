@@ -119,6 +119,39 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/simulation", {"mass_g": 100}, origin="https://another.example")[0], 400)
         self.assertEqual(self.request("GET", "/../../docs/stockWeight.md")[0], 404)
 
+    def test_pitch_example_does_not_change_live_state_or_database(self):
+        self.normal()
+        self.settle(950)
+        # Include every SQLite table, not only the visible event history.
+        before = list(self.application.db.iterdump())
+        telemetry = self.application.state()["telemetry"]
+        for _ in range(2):
+            status, _, response = self.request("GET", "/api/autonomy/example")
+            data = json.loads(response)
+            self.assertEqual(status, 200)
+            self.assertEqual(data["source"], "example")
+            self.assertEqual(data["autonomy"]["days"], 10)
+        self.assertEqual(list(self.application.db.iterdump()), before)
+        self.assertEqual(self.application.state()["telemetry"], telemetry)
+        self.assertEqual(self.application.state()["autonomy"]["source"], "device")
+
+    def test_autonomy_suspends_on_fault_and_pause_and_resets_after_tare(self):
+        self.normal()
+        self.settle(950)
+        self.assertEqual(self.application.state()["autonomy"]["consumed_pieces"], 30)
+        self.application.change_simulation({"fault": True})
+        self.assertEqual(self.application.state()["autonomy"]["status"], "unavailable")
+        self.application.change_simulation({"fault": False})
+        self.settle(950)
+        self.application.change_simulation({"connected": False})
+        self.assertEqual(self.application.state()["autonomy"]["status"], "unavailable")
+        self.application.change_simulation({"connected": True})
+        self.settle(950)
+        self.application.execute({"command": "tare"})
+        result = self.settle(950)["autonomy"]
+        self.assertEqual(result["status"], "insufficient_data")
+        self.assertEqual(result["consumed_pieces"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

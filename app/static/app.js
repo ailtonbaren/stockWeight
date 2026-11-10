@@ -149,15 +149,32 @@ function render(data) {
     $("virtual-led").classList.remove("on");
     $("virtual-led").setAttribute("aria-label", "LED sem leitura disponível");
   }
-  $("autonomy").textContent = data.autonomy.status === "no_consumption" ? "Sem consumo registrado" : "Dados insuficientes";
-  $("consumed").textContent = format(data.autonomy.consumed_pieces);
+  renderAutonomy(data.autonomy);
   renderHistory(data.events);
   drawChart(data.readings, reading?.settings.minimum || 0);
   controls();
 }
 
-function renderHistory(events) {
-  const body = $("events");
+function renderAutonomy(autonomy) {
+  const hours = format(autonomy.observed_seconds / 3600, 1);
+  const observed = `${hours} h acompanhadas nos últimos ${autonomy.window_days} dias corridos.`;
+  const messages = {
+    forecast: `${format(autonomy.days, 1)} dias`,
+    no_consumption: "Sem consumo registrado",
+    insufficient_data: "Dados insuficientes",
+    unavailable: "Aguardando leitura válida",
+  };
+  $("autonomy").textContent = messages[autonomy.status] || "Dados insuficientes";
+  $("consumed").textContent = format(autonomy.consumed_pieces);
+  let detail = `Mínimo de ${autonomy.minimum_hours} h acompanhadas. ${observed}`;
+  if (autonomy.status === "forecast") detail = `${format(autonomy.daily_consumption, 1)} peças/dia. ${observed} Estimativa se o consumo médio se mantiver.`;
+  if (autonomy.status === "no_consumption") detail = `${observed} Ainda não há retiradas para calcular a previsão.`;
+  if (autonomy.status === "unavailable") detail = `A previsão fica suspensa até receber uma leitura conectada e estável com o recipiente. ${observed}`;
+  $("autonomy-detail").textContent = detail;
+}
+
+function renderHistory(events, target = "events", example = false) {
+  const body = $(target);
   body.replaceChildren();
   if (!events.length) {
     const row = body.insertRow();
@@ -169,7 +186,7 @@ function renderHistory(events) {
   const labels = {initial: "Estoque inicial", adjustment: "Ajuste de medição", withdrawal: "Retirada", restock: "Reposição"};
   for (const event of events) {
     const row = body.insertRow();
-    row.insertCell().textContent = new Date(event.received_at).toLocaleString("pt-BR");
+    row.insertCell().textContent = example ? `${format(event.elapsed_hours)} h` : new Date(event.received_at).toLocaleString("pt-BR");
     const tag = document.createElement("span");
     tag.className = `event-tag ${event.kind}`;
     tag.textContent = labels[event.kind] || event.kind;
@@ -180,6 +197,34 @@ function renderHistory(events) {
     row.insertCell().textContent = `${format(event.quantity)} peças`;
   }
 }
+
+let exampleLoaded = false;
+let exampleLoading = false;
+$("autonomy-example").addEventListener("toggle", async () => {
+  if (!$("autonomy-example").open || exampleLoaded || exampleLoading) return;
+  exampleLoading = true;
+  $("example-loading").hidden = false;
+  $("example-error").hidden = true;
+  try {
+    const data = await request("/api/autonomy/example");
+    const autonomy = data.autonomy;
+    $("example-stock").textContent = `${format(data.quantity)} peças`;
+    $("example-period").textContent = `${format(autonomy.observed_days)} dias`;
+    $("example-consumed").textContent = `${format(autonomy.consumed_pieces)} peças`;
+    $("example-rate").textContent = `${format(autonomy.daily_consumption, 1)} peças/dia`;
+    $("example-days").textContent = `${format(autonomy.days, 1)} dias`;
+    $("example-formula").textContent = `${format(autonomy.consumed_pieces)} peças ÷ ${format(autonomy.observed_days)} dias = ${format(autonomy.daily_consumption, 1)} peças/dia. ${format(data.quantity)} peças ÷ ${format(autonomy.daily_consumption, 1)} peças/dia = ${format(autonomy.days, 1)} dias de autonomia.`;
+    renderHistory(data.events, "example-events", true);
+    $("example-content").hidden = false;
+    exampleLoaded = true;
+  } catch (error) {
+    $("example-error").textContent = "Não foi possível carregar o exemplo. Feche e abra esta seção para tentar novamente.";
+    $("example-error").hidden = false;
+  } finally {
+    $("example-loading").hidden = true;
+    exampleLoading = false;
+  }
+});
 
 function drawChart(readings, minimum) {
   const canvas = $("stock-chart");
@@ -238,6 +283,8 @@ async function refresh() {
     $("server-error").textContent = "Não foi possível atualizar o painel. Verifique se o servidor está em execução no terminal.";
     if (current) current.connected = false;
     for (const id of ["quantity", "net", "gross"]) $(id).textContent = "—";
+    $("autonomy").textContent = "Servidor indisponível";
+    $("autonomy-detail").textContent = "Reconecte ao servidor para atualizar a previsão.";
     $("stock-status").textContent = "Sem conexão";
     $("stock-status").className = "pill neutral";
     $("virtual-led").classList.remove("on");

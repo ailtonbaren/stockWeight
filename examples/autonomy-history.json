@@ -1,0 +1,11 @@
+{
+  "label": "Histórico fictício para demonstração da autonomia",
+  "observed_days": 3,
+  "initial_quantity": 160,
+  "movements": [
+    {"elapsed_hours": 12, "kind": "withdrawal", "delta": -20},
+    {"elapsed_hours": 36, "kind": "withdrawal", "delta": -30},
+    {"elapsed_hours": 48, "kind": "restock", "delta": 100},
+    {"elapsed_hours": 60, "kind": "withdrawal", "delta": -10}
+  ]
+}
