@@ -1,90 +1,96 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#192622">
+  <meta name="theme-color" content="#24292e">
   <title>StockWeight — Controle de estoque</title>
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
   <a class="skip" href="#main">Pular para o conteúdo</a>
-  <aside class="sidebar">
-    <a class="brand" href="#overview"><span class="brand-icon">sw<span>↗</span></span><span>StockWeight<small>ESTOQUE INTELIGENTE</small></span></a>
-    <div class="workspace"><span class="workspace-icon">01</span><div>Laboratório<small>Ambiente de desenvolvimento</small></div></div>
-    <nav aria-label="Navegação principal">
-      <a class="nav-active" href="#overview"><span aria-hidden="true">▦</span> Visão geral</a>
-      <a href="#history"><span aria-hidden="true">↕</span> Movimentações</a>
-      <a href="#settings"><span aria-hidden="true">⚙</span> Configuração</a>
-    </nav>
-    <div class="sidebar-note"><span class="eyebrow">DO PESO À INFORMAÇÃO</span><p>Menos contagem manual.<br>Mais controle do estoque.</p></div>
-    <div class="stage"><span class="stage-dot"></span><div><span id="stage-title">Etapa 01</span><small id="stage-description">Simulação e validação local</small></div></div>
-  </aside>
-
   <main id="main">
+    <div class="app-bar">
+      <strong class="app-name">StockWeight</strong>
+      <div class="header-controls">
+        <div class="header-meta"><span id="connection" class="pill neutral">Conectando ao servidor…</span><small>Última leitura <span id="last-reading">—</span></small></div>
+        <button id="theme-toggle" type="button" class="theme-toggle" role="switch" aria-checked="true" aria-label="Modo noturno"><span class="theme-track" aria-hidden="true"></span><span id="theme-label">Noturno</span></button>
+      </div>
+    </div>
     <header id="overview" class="page-header">
-      <div><p class="eyebrow">MONITORAMENTO DE MATERIAIS</p><h1>Seu estoque, em tempo real<span>.</span></h1><p class="muted">Acompanhe o peso. Entenda cada movimentação.</p></div>
-      <div class="header-meta"><span id="connection" class="pill neutral">Conectando ao servidor…</span><small>Última leitura <span id="last-reading">—</span></small></div>
+      <h1>Parafusos</h1><p class="muted">Recipiente 01 / Medição por peso</p>
     </header>
-
-    <div class="notice"><span class="notice-icon" aria-hidden="true">i</span><p><strong id="mode-title">Modo de teste local.</strong> <span id="mode-description">Os controles abaixo alimentam um simulador com a lógica do firmware. O ESP32 no Wokwi ainda não está conectado.</span></p><span id="mode-tag" class="notice-tag">Teste sem broker</span></div>
+    <div class="notice"><p><strong id="mode-title">Modo de teste local.</strong> <span id="mode-description">Os dados são simulados neste computador. Use os controles de massa para testar.</span></p><span id="mode-tag" class="notice-tag">Teste sem broker</span></div>
     <div id="server-error" class="error-banner" role="alert" hidden></div>
     <div id="history-warning" class="notice" role="status" hidden></div>
 
-    <section class="metrics" aria-label="Indicadores de estoque">
-      <article class="card stock-card">
-        <div class="card-top"><span class="eyebrow">QUANTIDADE DISPONÍVEL</span><span id="stock-status" class="pill neutral">Aguardando leitura</span></div>
-        <div class="stock-value"><strong id="quantity">—</strong><span>peças<br>estimadas</span></div>
-        <div class="stock-bottom"><span>Estoque mínimo <strong id="minimum-label">50 peças</strong></span><span id="stability">Estabilizando…</span></div>
-        <meter id="stock-meter" min="0" max="200" value="0" aria-label="Estoque em relação ao mínimo"></meter>
+    <section class="metrics" aria-label="Leitura atual e consumo">
+      <article class="reading-panel">
+        <div class="reading-heading"><h2>Leitura atual</h2><span id="stock-status" class="pill neutral">Aguardando leitura</span></div>
+        <div class="scale-values">
+          <div><span class="reading-label">Quantidade estimada</span><div class="stock-value"><strong id="quantity">—</strong><span>peças</span></div></div>
+          <div><span class="reading-label">Peso líquido</span><div class="weight-value"><strong id="net">—</strong><span>g</span></div></div>
+        </div>
+        <div class="weight-details">
+          <div><span>Peso bruto</span><strong id="gross">—</strong></div>
+          <div><span>Tara</span><strong id="tare">—</strong></div>
+          <div><span>Peso por peça</span><strong id="unit-label">5,00 g</strong></div>
+        </div>
+        <div class="stock-bottom"><span>Mínimo: <strong id="minimum-label">50 peças</strong></span><span id="stability">Estabilizando…</span></div>
+        <meter id="stock-meter" class="sr-only" min="0" max="200" value="0" aria-label="Estoque em relação ao mínimo"></meter>
         <p id="stock-hint" class="card-footnote">Aguarde uma leitura estável para confirmar o estoque.</p>
       </article>
-      <article class="card weight-card">
-        <div class="card-top"><span class="eyebrow">LEITURA DA BALANÇA</span><span aria-hidden="true" class="card-symbol">⚖</span></div>
-        <div class="weight-value"><strong id="net">—</strong><span>g líquidos</span></div>
-        <div class="weight-details"><div><span>Massa bruta</span><strong id="gross">—</strong></div><div><span>Tara do recipiente</span><strong id="tare">—</strong></div><div><span>Massa por peça</span><strong id="unit-label">5,00 g</strong></div></div>
-      </article>
-      <article class="card autonomy-card">
-        <div class="card-top"><span class="eyebrow">AUTONOMIA ESTIMADA</span><span aria-hidden="true" class="card-symbol">◷</span></div>
-        <div class="autonomy-value" id="autonomy">Aguardando leitura</div>
+      <article class="autonomy-panel">
+        <h2>Consumo e autonomia</h2>
+        <div class="consumption"><span>Retiradas no período</span><span><strong id="consumed">0</strong> peças</span></div>
+        <div class="autonomy-row"><span>Previsão</span><strong id="autonomy">Aguardando leitura</strong></div>
         <p id="autonomy-detail" class="muted small">São necessárias pelo menos 24 horas de acompanhamento.</p>
-        <div class="consumption"><strong id="consumed">0</strong><span>peças retiradas no período<br><small>janela dos últimos 7 dias corridos</small></span></div>
+        <p class="period-note">Período: últimos 7 dias corridos.</p>
       </article>
     </section>
 
     <div class="work-grid">
-      <section class="card simulation-card" aria-labelledby="simulation-title">
-        <div class="section-title"><div><span id="source-eyebrow" class="eyebrow">BANCADA VIRTUAL</span><h2 id="simulation-title">Balança de teste</h2></div><span id="virtual-led" class="led" aria-label="LED de alerta desligado"></span></div>
+      <section class="simulation-card" aria-labelledby="simulation-title">
+        <div class="section-title"><div><h2 id="simulation-title">Entrada de peso</h2><p id="source-eyebrow" class="section-subtitle">Simulador local</p></div><span class="led-label"><span id="virtual-led" class="led" aria-label="LED de alerta desligado"></span>LED de alerta</span></div>
         <div id="local-controls">
-        <p class="muted small source-intro">Altere a massa total para simular retiradas e reposições.</p>
-        <form id="mass-form" class="mass-form"><label for="mass">Massa total sobre a balança</label><div class="input-action"><div class="input-unit"><input id="mass" name="mass" type="number" min="0" max="5000" step="1" value="100" required><span>g</span></div><button type="submit" class="button dark">Aplicar</button></div></form>
-        <label for="mass-slider" class="sr-only">Ajustar massa de teste</label><input id="mass-slider" class="mass-slider" type="range" min="0" max="5000" step="1" value="100"><div class="range-labels"><span>0 g</span><span>Capacidade simulada: 5 kg</span></div>
-        <div class="presets" aria-label="Massas de exemplo"><button type="button" data-mass="100">100 g <small>recipiente vazio</small></button><button type="button" data-mass="1100">1.100 g <small>exemplo normal</small></button><button type="button" data-mass="275">275 g <small>exemplo baixo</small></button><button type="button" data-mass="1200">1.200 g <small>exemplo reposição</small></button></div>
-        <p class="small muted">Exemplos: recipiente de 100 g e peças de 5 g. Comece pelo recipiente vazio e aplique a tara.</p>
-        <div class="simulation-actions"><label class="check"><input id="fault" type="checkbox"> Simular falha do sensor</label><button id="pause" type="button" class="text-button">Pausar conexão</button></div>
+          <p class="muted small source-intro">Informe o peso total, incluindo o recipiente.</p>
+          <form id="mass-form" class="mass-form"><label for="mass">Massa total sobre a balança</label><div class="input-action"><div class="input-unit"><input id="mass" name="mass" type="number" min="0" max="5000" step="1" value="100" required><span>g</span></div><button type="submit" class="button dark">Aplicar</button></div></form>
+          <label for="mass-slider" class="sr-only">Ajustar massa de teste</label><input id="mass-slider" class="mass-slider" type="range" min="0" max="5000" step="1" value="100"><div class="range-labels"><span>0 g</span><span>Capacidade simulada: 5 kg</span></div>
+          <div class="presets" aria-label="Massas de exemplo"><button type="button" data-mass="100">100 g <small>recipiente vazio</small></button><button type="button" data-mass="1100">1.100 g <small>normal</small></button><button type="button" data-mass="275">275 g <small>baixo</small></button><button type="button" data-mass="1200">1.200 g <small>reposição</small></button></div>
+          <p class="small muted">Atalhos para recipiente de 100 g e peças de 5 g. Tare com o recipiente vazio antes de usar.</p>
+          <div class="simulation-actions"><label class="check"><input id="fault" type="checkbox"> Simular falha do sensor</label><button id="pause" type="button" class="text-button">Pausar conexão</button></div>
         </div>
         <div id="mqtt-controls" hidden>
           <p class="muted small source-intro">Mova o potenciômetro no Wokwi para alterar a massa. A contagem, a tara e o alerta são calculados pelo ESP32.</p>
-          <div class="device-guide"><span class="device-guide-icon" aria-hidden="true">⇄</span><strong id="device-state">Aguardando o ESP32</strong><p class="muted small">Mantenha a simulação do Wokwi em execução. Use os controles ao lado para configurar a medição e aguarde a confirmação do dispositivo.</p></div>
-          <details><summary>Detalhes da conexão <span aria-hidden="true">+</span></summary><dl class="connection-details"><dt>Broker</dt><dd id="mqtt-host">—</dd><dt>Canal do dispositivo</dt><dd id="mqtt-topic">—</dd></dl></details>
+          <div class="device-guide"><strong id="device-state">Aguardando o ESP32</strong><p class="muted small">Mantenha a simulação do Wokwi em execução. Use os controles ao lado para configurar a medição e aguarde a confirmação do dispositivo.</p></div>
+          <details><summary>Detalhes da conexão</summary><dl class="connection-details"><dt>Broker</dt><dd id="mqtt-host">—</dd><dt>Canal do dispositivo</dt><dd id="mqtt-topic">—</dd></dl></details>
         </div>
       </section>
-
-      <section id="settings" class="card settings-card" aria-labelledby="settings-title">
-        <div class="section-title"><div><span class="eyebrow">PARAFUSOS · RECIPIENTE 01</span><h2 id="settings-title">Configurar medição</h2></div><span class="subtle-index">01</span></div>
-        <div class="tare-row"><div><strong>Zero da balança</strong><p class="small muted">Use com o recipiente vazio e a leitura estável.</p></div><button id="tare-button" type="button" class="button outline" disabled>Tarar balança</button></div>
+      <section id="settings" class="settings-card" aria-labelledby="settings-title">
+        <div class="section-title"><h2 id="settings-title">Ajustes da balança</h2></div>
+        <div class="tare-row"><div><strong>Tara do recipiente</strong><p class="small muted">Use com o recipiente vazio e a leitura estável.</p></div><button id="tare-button" type="button" class="button outline" disabled>Tarar balança</button></div>
         <div class="settings-fields">
           <form id="unit-form"><label for="unit">Massa unitária <span>(g)</span></label><div class="input-action"><input id="unit" name="unit" type="number" min="0.01" max="5000" step="any" value="5" required><button type="submit" class="button small-button" data-command-control>Salvar</button></div></form>
           <form id="minimum-form"><label for="minimum">Estoque mínimo <span>(peças)</span></label><div class="input-action"><input id="minimum" name="minimum" type="number" min="0" max="1000000" step="1" value="50" required><button type="submit" class="button small-button" data-command-control>Salvar</button></div></form>
         </div>
-        <details><summary>Descobrir a massa por uma amostra <span aria-hidden="true">+</span></summary><p class="small muted">Após tarar o recipiente vazio, coloque uma quantidade conhecida de parafusos e aguarde estabilizar.</p><form id="sample-form"><label for="sample-count">Quantidade de peças na amostra</label><div class="input-action"><input id="sample-count" type="number" min="1" max="1000000" step="1" value="10" required><button type="submit" class="button outline" data-stable-control>Calcular e aplicar</button></div></form></details>
-        <details><summary>Calibrar com uma massa conhecida <span aria-hidden="true">+</span></summary><p class="small muted">Tare o recipiente vazio, coloque uma massa de referência e informe apenas a massa adicionada. Esta calibração ajusta a escala simulada.</p><form id="calibration-form"><label for="reference">Massa de referência <span>(g)</span></label><div class="input-action"><input id="reference" type="number" min="0.01" max="5000" step="any" value="500" required><button type="submit" class="button outline" data-stable-control>Calibrar</button></div></form><p id="calibration-status" class="small muted">Escala nominal, sem calibração de referência.</p></details>
+        <details><summary>Calcular massa por peça</summary><p class="small muted">Após tarar o recipiente vazio, coloque uma quantidade conhecida de parafusos e aguarde estabilizar.</p><form id="sample-form"><label for="sample-count">Quantidade de peças na amostra</label><div class="input-action"><input id="sample-count" type="number" min="1" max="1000000" step="1" value="10" required><button type="submit" class="button outline" data-stable-control>Calcular e aplicar</button></div></form></details>
+        <details><summary>Calibração com peso conhecido</summary><p class="small muted">Tare o recipiente vazio, coloque uma massa de referência e informe apenas a massa adicionada. A calibração ajusta a conversão da leitura para gramas.</p><form id="calibration-form"><label for="reference">Massa de referência <span>(g)</span></label><div class="input-action"><input id="reference" type="number" min="0.01" max="5000" step="any" value="500" required><button type="submit" class="button outline" data-stable-control>Calibrar</button></div></form><p id="calibration-status" class="small muted">Escala nominal, sem calibração de referência.</p></details>
       </section>
     </div>
 
-    <details id="autonomy-example" class="card autonomy-example">
-      <summary>Histórico de exemplo · demonstração da autonomia <span aria-hidden="true">+</span></summary>
+    <section id="history" class="history-card" aria-labelledby="history-title">
+      <div class="section-title"><h2 id="history-title">Registro de movimentações</h2><span class="saved-label">Salvo neste notebook</span></div>
+      <div class="table-scroll"><table><thead><tr><th>Data e hora</th><th>Movimentação</th><th>Variação</th><th>Estoque resultante</th></tr></thead><tbody id="events"><tr><td colspan="4" class="empty">Aguardando a primeira medição estável.</td></tr></tbody></table></div>
+      <div class="history-footer"><span>Até 100 eventos recentes · horários locais</span><span>Ajustes de medição não entram como consumo.</span></div>
+      <details class="chart-disclosure"><summary>Gráfico das últimas leituras</summary>
+        <div class="chart-key"><span class="chart-line">Quantidade</span><span class="chart-limit">Estoque mínimo</span></div>
+        <div class="chart-container"><canvas id="stock-chart" role="img" aria-label="Gráfico das quantidades estáveis nos últimos dois minutos"></canvas><p id="chart-empty" class="muted small">O gráfico aparece após as primeiras leituras estáveis.</p></div>
+      </details>
+    </section>
+    <details id="autonomy-example" class="autonomy-example">
+      <summary>Exemplo de cálculo da autonomia <span class="example-tag">Dados fictícios</span></summary>
       <p class="muted small">Dados fictícios, separados do estoque monitorado. Este exemplo não altera a balança nem o seu histórico.</p>
       <div id="example-error" class="error-banner" role="alert" hidden></div>
       <p id="example-loading" class="muted small">Carregando exemplo…</p>
@@ -101,14 +107,7 @@
         <p class="muted small">A reposição de 100 peças aumenta o estoque disponível. Apenas as retiradas entram na média de consumo. A previsão pressupõe que essa média se mantenha.</p>
       </div>
     </details>
-
-    <section id="history" class="card history-card" aria-labelledby="history-title">
-      <div class="section-title"><div><span class="eyebrow">CADA MOVIMENTAÇÃO CONTA</span><h2 id="history-title">Histórico do estoque</h2></div><span class="saved-label"><span aria-hidden="true">●</span> Salvo neste notebook</span></div>
-      <div class="chart-container"><canvas id="stock-chart" role="img" aria-label="Gráfico das quantidades estáveis nos últimos dois minutos"></canvas><p id="chart-empty" class="muted small">O gráfico aparece após as primeiras leituras estáveis.</p></div>
-      <div class="table-scroll"><table><thead><tr><th>Data e hora</th><th>Movimentação</th><th>Variação</th><th>Estoque resultante</th></tr></thead><tbody id="events"><tr><td colspan="4" class="empty">Aguardando a primeira medição estável.</td></tr></tbody></table></div>
-      <div class="history-footer"><span>Até 100 eventos recentes · horários locais</span><span>Ajustes de medição não entram como consumo.</span></div>
-    </section>
-    <footer class="page-footer"><span>StockWeight <span class="footer-dot">/</span> Estoque inteligente por pesagem</span><span>Quantidade aproximada · peças de massas similares</span></footer>
+    <footer class="page-footer"><span>Quantidade aproximada · peças de massas similares</span></footer>
   </main>
   <div id="feedback" class="feedback" role="status" aria-live="polite" hidden></div>
 </body>

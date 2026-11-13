@@ -86,14 +86,12 @@ function render(data) {
   $("history-warning").hidden = !data.history_warning;
   $("history-warning").textContent = data.history_warning || "";
   $("mode-title").textContent = mqttMode ? "ESP32 via MQTT." : "Modo de teste local.";
-  $("mode-description").textContent = mqttMode ? "As leituras vêm do Wokwi. Os comandos são enviados ao ESP32 e precisam da confirmação do dispositivo." : "Os controles abaixo alimentam um simulador com a lógica do firmware. O ESP32 no Wokwi ainda não está conectado.";
+  $("mode-description").textContent = mqttMode ? "As leituras vêm do ESP32 no Wokwi. Aguarde a confirmação ao enviar comandos." : "Os dados são simulados neste computador. Use os controles de massa para testar.";
   $("mode-tag").textContent = mqttMode ? (data.mqtt_connected ? "Broker conectado" : "Aguardando broker") : "Teste sem broker";
   $("local-controls").hidden = mqttMode;
   $("mqtt-controls").hidden = !mqttMode;
-  $("stage-title").textContent = mqttMode ? "Etapa 02" : "Etapa 01";
-  $("stage-description").textContent = mqttMode ? "Integração Wokwi e dashboard" : "Simulação e validação local";
-  $("source-eyebrow").textContent = mqttMode ? "DISPOSITIVO REMOTO" : "BANCADA VIRTUAL";
-  $("simulation-title").textContent = mqttMode ? "ESP32 no Wokwi" : "Balança de teste";
+  $("source-eyebrow").textContent = mqttMode ? "Leituras recebidas por MQTT" : "Simulador local";
+  $("simulation-title").textContent = mqttMode ? "ESP32 no Wokwi" : "Entrada de peso";
   if (mqttMode) {
     $("mqtt-host").textContent = `${data.mqtt.host}:${data.mqtt.port}`;
     $("mqtt-topic").textContent = data.mqtt.topic;
@@ -126,7 +124,7 @@ function render(data) {
     $("stock-status").textContent = status;
     $("stock-status").className = `pill ${style}`;
     $("stock-hint").textContent = hint;
-    $("stability").textContent = stable ? "● Leitura estável" : "○ Leitura não confirmada";
+    $("stability").textContent = stable ? "Leitura estável" : "Leitura não confirmada";
     $("minimum-label").textContent = `${format(settings.minimum)} peças`;
     $("unit-label").textContent = `${format(settings.unit_g, 2)} g`;
     $("net").textContent = online ? format(reading.net_g, 1) : "—";
@@ -143,7 +141,7 @@ function render(data) {
     for (const id of ["quantity", "net", "gross", "tare", "unit-label", "minimum-label"]) $(id).textContent = "—";
     $("stock-status").textContent = "Aguardando leitura";
     $("stock-status").className = "pill neutral";
-    $("stability").textContent = "○ Leitura não confirmada";
+    $("stability").textContent = "Leitura não confirmada";
     $("stock-hint").textContent = mqttMode ? "Inicie a simulação no Wokwi e aguarde uma leitura recente." : "Aguarde uma leitura estável para confirmar o estoque.";
     $("stock-meter").value = 0;
     $("virtual-led").classList.remove("on");
@@ -235,26 +233,28 @@ function drawChart(readings, minimum) {
   canvas.width = Math.round(width * ratio);
   canvas.height = Math.round(height * ratio);
   const context = canvas.getContext("2d");
+  const colors = getComputedStyle(document.documentElement);
+  const chartText = colors.getPropertyValue("--chart-text").trim();
   context.scale(ratio, ratio);
   const stable = readings.filter((point) => point.stable && point.quantity != null);
   $("chart-empty").hidden = stable.length < 2;
   const left = 40, right = width - 16, top = 12, bottom = height - 24;
   const maximum = Math.max(20, Math.ceil(Math.max(minimum, ...stable.map((p) => p.quantity)) / 20) * 20);
   const y = (value) => bottom - value / maximum * (bottom - top);
-  context.font = "9px system-ui";
+  context.font = "11px system-ui";
   for (let step = 0; step <= 2; step++) {
     const value = Math.round(maximum * step / 2);
-    context.strokeStyle = "#edf0e7";
+    context.strokeStyle = colors.getPropertyValue("--chart-grid").trim();
     context.beginPath(); context.moveTo(left, y(value)); context.lineTo(right, y(value)); context.stroke();
-    context.fillStyle = "#9aa18f"; context.fillText(format(value), 0, y(value) + 3);
+    context.fillStyle = chartText; context.fillText(format(value), 0, y(value) + 3);
   }
   if (stable.length < 2) return;
   const firstTime = Date.parse(readings[0].received_at);
   const duration = Math.max(1000, Date.parse(readings.at(-1).received_at) - firstTime);
   const x = (point) => left + (Date.parse(point.received_at) - firstTime) / duration * (right - left);
-  context.setLineDash([4, 4]); context.strokeStyle = "#d8a381";
+  context.setLineDash([4, 4]); context.strokeStyle = colors.getPropertyValue("--chart-limit").trim();
   context.beginPath(); context.moveTo(left, y(minimum)); context.lineTo(right, y(minimum)); context.stroke();
-  context.setLineDash([]); context.strokeStyle = "#78965d"; context.lineWidth = 2;
+  context.setLineDash([]); context.strokeStyle = colors.getPropertyValue("--chart-line").trim(); context.lineWidth = 2;
   context.beginPath();
   let drawing = false;
   for (const point of readings) {
@@ -264,7 +264,7 @@ function drawChart(readings, minimum) {
     drawing = true;
   }
   context.stroke();
-  context.fillStyle = "#8d9781";
+  context.fillStyle = chartText;
   context.fillText(time(readings[0].received_at), left, height - 3);
   const lastLabel = time(readings.at(-1).received_at);
   context.fillText(lastLabel, right - context.measureText(lastLabel).width, height - 3);
@@ -321,9 +321,7 @@ for (const [form, input, command] of [
   $(form).addEventListener("submit", (event) => { event.preventDefault(); sendCommand(command, Number($(input).value)); });
 }
 for (const id of ["unit", "minimum"]) $(id).addEventListener("input", () => { $(id).dataset.dirty = "true"; });
-document.querySelectorAll("nav a").forEach((link) => link.addEventListener("click", () => {
-  document.querySelectorAll("nav a").forEach((item) => item.classList.toggle("nav-active", item === link));
-}));
+window.addEventListener("themechange", () => current && drawChart(current.readings, current.telemetry?.settings.minimum || 0));
 window.addEventListener("resize", () => current && drawChart(current.readings, current.telemetry?.settings.minimum || 0));
 (async function poll() {
   await refresh();

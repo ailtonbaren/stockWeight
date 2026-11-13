@@ -423,6 +423,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, example_history())
             return
         files = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
+                 "/theme.js": ("theme.js", "text/javascript"),
                  "/styles.css": ("styles.css", "text/css")}
         if path not in files:
             self.send_json(404, {"error": "Recurso não encontrado."})

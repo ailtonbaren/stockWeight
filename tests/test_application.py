@@ -104,7 +104,7 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(state["mode"], "local_simulator")
         self.assertFalse(state["wokwi_connected"])
-        for path in ("/app.js", "/styles.css"):
+        for path in ("/app.js", "/theme.js", "/styles.css"):
             self.assertEqual(self.request("GET", path)[0], 200)
 
     def test_http_commands_validate_input_and_return_ack(self):
