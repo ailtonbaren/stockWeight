@@ -8,6 +8,9 @@ let current = null;
 let refreshing = false;
 let busy = false;
 let initialized = false;
+let chosenMaterial = null;
+let historyMaterial = "";
+let materialOptionsKey = "";
 let feedbackTimer;
 let sliderTimer;
 
@@ -29,28 +32,42 @@ function feedback(message, failure = false, persistent = false) {
 }
 
 function controls() {
-  const online = Boolean(current?.connected) && !busy;
+  const choiceMatches = !chosenMaterial || chosenMaterial === current?.workflow?.material?.id;
+  const online = Boolean(current?.connected) && !busy && Boolean(current?.workflow?.ready) && choiceMatches;
   const stable = online && Boolean(current?.telemetry?.stable);
-  $("tare-button").disabled = !stable;
+  const preparing = current?.workflow?.phase === "preparing";
+  $("tare-button").disabled = !stable || !preparing;
+  $("reset-tare-button").disabled = !online || !current?.telemetry?.settings?.tare_set;
+  $("prepare-button").disabled = !current?.connected || busy || !current?.workflow?.supported;
+  $("start-button").disabled = busy || !current?.workflow?.can_start || !choiceMatches;
+  $("material-select").disabled = busy;
+  $("material-form").querySelector("button").disabled = busy;
   document.querySelectorAll("[data-command-control]").forEach((button) => { button.disabled = !online; });
-  document.querySelectorAll("[data-stable-control]").forEach((button) => { button.disabled = !stable; });
+  document.querySelectorAll("[data-preparation-control]").forEach((button) => { button.disabled = !online || !preparing; });
+  document.querySelectorAll("[data-stable-control]").forEach((button) => { button.disabled = !stable || !preparing || !current?.telemetry?.settings?.tare_set; });
 }
 
-async function sendCommand(command, value) {
+async function sendCommand(command, value, extra = {}) {
   if (busy) return;
   busy = true;
   controls();
   try {
     if (current?.mode === "mqtt") feedback("Enviando comando. Aguardando confirmação do ESP32…", false, true);
-    const result = await request("/api/command", {command, value, command_id: crypto.randomUUID()});
+    const result = await request("/api/command", {command, value, command_id: crypto.randomUUID(), ...extra});
     feedback(result.message);
     // Reflect the acknowledged configuration, including a unit derived from a sample.
     if (command === "sample_unit") $("unit").dataset.dirty = "false";
     if (command === "unit") $("unit").dataset.dirty = "false";
     if (command === "minimum") $("minimum").dataset.dirty = "false";
+    if (command === "prepare") {
+      chosenMaterial = null;
+      historyMaterial = "";
+      $("unit").dataset.dirty = $("minimum").dataset.dirty = "false";
+    }
     await refresh();
   } catch (error) {
     feedback(error.message, true);
+    await refresh();
   } finally {
     busy = false;
     controls();
@@ -78,6 +95,8 @@ function render(data) {
   const reading = data.telemetry;
   const online = data.connected;
   const mqttMode = data.mode === "mqtt";
+  const flow = data.workflow;
+  renderMaterials(data.materials, flow);
   $("connection").textContent = mqttMode ? (online ? "ESP32 conectado" : data.mqtt_connected ? "Aguardando ESP32" : "Broker desconectado") : (online ? "Simulador local ativo" : "Simulador desconectado");
   $("connection").className = `pill ${online ? "normal" : "neutral"}`;
   $("last-reading").textContent = time(data.last_reading_at);
@@ -104,9 +123,9 @@ function render(data) {
     $("mass-slider").value = data.simulation.mass_g;
     initialized = true;
   }
-  if (reading) {
+  if (reading && flow.ready) {
     const settings = reading.settings;
-    const quantity = online ? reading.quantity : null;
+    const quantity = online && flow.unit_ready && settings.tare_set ? reading.quantity : null;
     const stable = online && reading.stable;
     let status = "Estoque normal", style = "normal", hint = "Quantidade confirmada após estabilização da leitura.";
     if (!online) {
@@ -117,6 +136,10 @@ function render(data) {
       status = "Recipiente ausente"; style = "neutral"; hint = "Massa abaixo da tara. Aguardando o retorno do recipiente.";
     } else if (!stable) {
       status = "Estabilizando"; style = "neutral"; hint = "Aguarde cerca de 1 segundo. Oscilações não geram movimentações.";
+    } else if (flow.phase === "preparing") {
+      status = "Estimativa de teste"; style = "neutral"; hint = "Confira o lote e clique em Iniciar monitoramento. Nenhuma movimentação é registrada nesta etapa.";
+      if (!settings.tare_set) { status = "Tare o recipiente"; hint = flow.message; }
+      else if (!flow.unit_ready) { status = "Pese uma amostra"; hint = flow.message; }
     } else if (reading.alert) {
       status = "Repor estoque"; style = "alert"; hint = "A quantidade está igual ou abaixo do estoque mínimo.";
     }
@@ -126,7 +149,7 @@ function render(data) {
     $("stock-hint").textContent = hint;
     $("stability").textContent = stable ? "Leitura estável" : "Leitura não confirmada";
     $("minimum-label").textContent = `${format(settings.minimum)} peças`;
-    $("unit-label").textContent = `${format(settings.unit_g, 2)} g`;
+    $("unit-label").textContent = flow.unit_ready ? `${format(settings.unit_g, 3)} g` : "A definir";
     $("net").textContent = online ? format(reading.net_g, 1) : "—";
     $("gross").textContent = online ? gram(reading.gross_g) : "—";
     $("tare").textContent = gram(reading.tare_g);
@@ -134,7 +157,7 @@ function render(data) {
     $("stock-meter").value = quantity || 0;
     $("virtual-led").classList.toggle("on", online && reading.alert === true);
     $("virtual-led").setAttribute("aria-label", online && reading.alert ? "LED de alerta aceso" : "LED de alerta desligado");
-    inputValue("unit", settings.unit_g);
+    inputValue("unit", flow.material.unit_g == null ? "" : Number(flow.material.unit_g.toFixed(6)));
     inputValue("minimum", settings.minimum);
     $("calibration-status").textContent = settings.calibrated ? "Escala calibrada com massa de referência." : "Escala nominal, sem calibração de referência.";
   } else {
@@ -153,6 +176,31 @@ function render(data) {
   controls();
 }
 
+function renderMaterials(materials, flow) {
+  const key = JSON.stringify(materials.map(({id, name}) => [id, name]));
+  if (key !== materialOptionsKey) {
+    materialOptionsKey = key;
+    $("material-select").replaceChildren();
+    $("history-material").replaceChildren(new Option("Material atual", ""), new Option("Todos os materiais", "all"));
+    for (const material of materials) {
+      $("material-select").add(new Option(material.name, material.id));
+      $("history-material").add(new Option(material.name, material.id));
+    }
+  }
+  $("material-select").value = chosenMaterial || flow.material.id;
+  $("history-material").value = historyMaterial;
+  $("material-title").textContent = flow.material.name;
+  $("workflow-phase").textContent = flow.phase === "monitoring" ? "Monitorando" : "Preparação";
+  $("workflow-phase").className = `pill ${flow.phase === "monitoring" ? "normal" : "neutral"}`;
+  $("preparation-title").textContent = flow.phase === "monitoring" ? "Material monitorado" : "Preparar contagem";
+  $("workflow-message").textContent = chosenMaterial && chosenMaterial !== flow.material.id
+    ? "Clique em Preparar contagem para usar o material selecionado. Troque o conteúdo do recipiente após a confirmação."
+    : flow.message;
+  $("preparation-note").hidden = flow.phase === "monitoring";
+  $("start-button").hidden = flow.phase === "monitoring";
+  $("prepare-button").textContent = flow.ready && (!chosenMaterial || chosenMaterial === flow.material.id) ? "Preparar nova contagem" : "Preparar contagem";
+}
+
 function renderAutonomy(autonomy) {
   const hours = format(autonomy.observed_seconds / 3600, 1);
   const observed = `${hours} h acompanhadas nos últimos ${autonomy.window_days} dias corridos.`;
@@ -161,6 +209,7 @@ function renderAutonomy(autonomy) {
     no_consumption: "Sem consumo registrado",
     insufficient_data: "Dados insuficientes",
     unavailable: "Aguardando leitura válida",
+    preparing: "Preparação da contagem",
   };
   $("autonomy").textContent = messages[autonomy.status] || "Dados insuficientes";
   $("consumed").textContent = format(autonomy.consumed_pieces);
@@ -168,6 +217,7 @@ function renderAutonomy(autonomy) {
   if (autonomy.status === "forecast") detail = `${format(autonomy.daily_consumption, 1)} peças/dia. ${observed} Estimativa se o consumo médio se mantiver.`;
   if (autonomy.status === "no_consumption") detail = `${observed} Ainda não há retiradas para calcular a previsão.`;
   if (autonomy.status === "unavailable") detail = `A previsão fica suspensa até receber uma leitura conectada e estável com o recipiente. ${observed}`;
+  if (autonomy.status === "preparing") detail = "O acompanhamento do consumo começa ao iniciar o monitoramento do lote.";
   $("autonomy-detail").textContent = detail;
 }
 
@@ -177,14 +227,15 @@ function renderHistory(events, target = "events", example = false) {
   if (!events.length) {
     const row = body.insertRow();
     const cell = row.insertCell();
-    cell.colSpan = 4; cell.className = "empty";
-    cell.textContent = "Aguardando a primeira medição estável.";
+    cell.colSpan = example ? 4 : 5; cell.className = "empty";
+    cell.textContent = "O histórico começa ao iniciar o monitoramento. Não há movimentos para este material.";
     return;
   }
   const labels = {initial: "Estoque inicial", adjustment: "Ajuste de medição", withdrawal: "Retirada", restock: "Reposição"};
   for (const event of events) {
     const row = body.insertRow();
     row.insertCell().textContent = example ? `${format(event.elapsed_hours)} h` : new Date(event.received_at).toLocaleString("pt-BR");
+    if (!example) row.insertCell().textContent = event.material_name;
     const tag = document.createElement("span");
     tag.className = `event-tag ${event.kind}`;
     tag.textContent = labels[event.kind] || event.kind;
@@ -275,7 +326,8 @@ async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
-    render(await request("/api/state"));
+    const query = historyMaterial ? `?history_material=${encodeURIComponent(historyMaterial)}` : "";
+    render(await request("/api/state" + query));
   } catch (error) {
     $("connection").textContent = "Servidor local indisponível";
     $("connection").className = "pill alert";
@@ -314,6 +366,34 @@ document.querySelectorAll("[data-mass]").forEach((button) => button.addEventList
 $("fault").addEventListener("change", (event) => simulation({fault: event.target.checked}));
 $("pause").addEventListener("click", () => current && simulation({connected: !current.simulation.connected}));
 $("tare-button").addEventListener("click", () => sendCommand("tare"));
+$("reset-tare-button").addEventListener("click", () => sendCommand("reset_tare"));
+$("material-select").addEventListener("change", (event) => {
+  chosenMaterial = event.target.value;
+  if (current) renderMaterials(current.materials, current.workflow);
+  controls();
+});
+$("prepare-button").addEventListener("click", () => sendCommand("prepare", undefined, {material_id: $("material-select").value}));
+$("start-button").addEventListener("click", () => sendCommand("start_monitoring"));
+$("history-material").addEventListener("change", async (event) => { historyMaterial = event.target.value; await refresh(); });
+$("material-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (busy) return;
+  busy = true;
+  controls();
+  try {
+    const result = await request("/api/materials", {name: $("material-name").value});
+    chosenMaterial = result.material.id;
+    $("material-name").value = "";
+    document.querySelector(".new-material").open = false;
+    feedback(result.message);
+    await refresh();
+  } catch (error) {
+    feedback(error.message, true);
+  } finally {
+    busy = false;
+    controls();
+  }
+});
 for (const [form, input, command] of [
   ["unit-form", "unit", "unit"], ["minimum-form", "minimum", "minimum"],
   ["sample-form", "sample-count", "sample_unit"], ["calibration-form", "reference", "calibrate"],

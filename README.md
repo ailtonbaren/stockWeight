@@ -4,6 +4,20 @@ Controle de estoque por pesagem para pequenos almoxarifados, oficinas e laborat�
 
 O dashboard tem dois modos: **simulador local**, sem broker, e **MQTT**, para receber leituras e enviar comandos ao ESP32 no Wokwi. O usuário confirmou o funcionamento da integração completa usando a internet compartilhada do celular, após dificuldades de conexão na rede da faculdade. O painel também calcula a autonomia do estoque e oferece um histórico fictício separado para demonstrar essa previsão.
 
+## Contar por amostra e monitorar um material
+
+1. Selecione um material, ou use **Cadastrar material** para criar, por exemplo, “Prego” ou “Parafuso M4”. Clique em **Preparar contagem**. Ao trocar o material, aguarde a confirmação antes de substituir o conteúdo do recipiente.
+2. Coloque somente o recipiente vazio, aguarde estabilizar e clique em **Tarar balança**.
+3. Coloque uma amostra conhecida, por exemplo **10 peças**, e aguarde estabilizar. Em **Aprender peso por amostra**, informe 10 e clique em **Aprender peso por peça**. Também é possível informar a massa unitária manualmente.
+4. Coloque o lote completo que deseja contar. O painel mostra a estimativa; durante a preparação, as variações de peso não geram retiradas/reposições e o LED de estoque fica desligado.
+5. Confira o lote e clique em **Iniciar monitoramento**. A quantidade atual vira um único **Estoque inicial**. Só as mudanças estáveis seguintes geram movimentações e alerta.
+
+Cada material salva sua massa por peça e estoque mínimo no SQLite. A tara é refeita ao preparar outra contagem. Use o filtro **Material** no histórico para consultar um item ou todos os materiais; isso não muda o material da leitura atual. O recipiente contém um tipo por vez, escolhido manualmente no dashboard.
+
+Exemplo nominal: recipiente de 100 g, amostra com massa total de 150 g e 10 peças → cerca de 5 g por peça. Um lote com massa total de 500 g → cerca de 80 peças. Pequenas diferenças de massa decorrem da quantização do ADC simulado.
+
+O banco antigo é migrado automaticamente, preservando seus registros de parafusos. Ao reiniciar o simulador local ou o ESP32, o dispositivo entra em preparação; perfis e históricos continuam no notebook. Reiniciar somente o servidor MQTT pode retomar uma contagem conhecida se o ESP32 continuar na mesma sessão.
+
 ## Conectar Wokwi e dashboard por MQTT
 
 A aplicação continua no notebook. Não é necessário instalar um broker Mosquitto local. O ESP32 e o dashboard conectam ao broker na internet.
@@ -44,6 +58,8 @@ Abra **http://localhost:8765**, inicie o Wokwi e aguarde **ESP32 conectado** no 
 
 No modo MQTT, altere a massa **pelo potenciômetro do Wokwi**. Os controles de massa do simulador local ficam ocultos. Faça tara, configure massa unitária e mínimo pelos botões do dashboard. Sucesso só aparece após um `ack` correspondente emitido pelo ESP32. O prazo de espera é de oito segundos. Se expirar, o painel informa que o comando pode ter sido executado; confira a leitura antes de tentar de novo. O servidor não repete tara automaticamente.
 
+Para corrigir uma tara aplicada com peso errado, clique em **Resetar tara**, ao lado de **Tarar balança**. O reset remove o desconto mesmo quando a leitura está abaixo da tara anterior e o recipiente aparece como retirado. Ele volta à preparação, preservando calibração, massa unitária e mínimo, sem criar movimentações falsas. Aguarde estabilizar, tare o recipiente vazio e confira o lote antes de iniciar novamente. O botão exige conexão com o dispositivo, mas não exige leitura estável. Gere o firmware com `python3 scripts/prepare_wokwi.py --mqtt` e atualize `sketch.ino` no Wokwi para usar essas funções.
+
 O histórico MQTT fica em **`data/stockweight-mqtt.sqlite3`**, separado do banco dos testes locais. O último estado confirmado do dispositivo é armazenado, mas não é reaplicado automaticamente quando o ESP32 reinicia. Nessa situação, faça a tara e confira os parâmetros novamente.
 
 ### 4. Se o broker não conectar
@@ -74,8 +90,8 @@ Se houver várias movimentações enquanto o sistema estiver desconectado, o his
 
 ### Cenários da integração
 
-1. Com a massa estável, tare o recipiente vazio **pelo dashboard** e observe a confirmação no painel e no monitor serial.
-2. Aumente o potenciômetro até ficar acima do estoque mínimo; confira quantidade e LED.
+1. Selecione o material e prepare a contagem. Com a massa estável, tare o recipiente vazio **pelo dashboard**, aprenda ou informe a massa unitária e observe as confirmações.
+2. Aumente o potenciômetro até o lote completo, confira a estimativa e clique em **Iniciar monitoramento**. Verifique o estoque inicial e o LED.
 3. Reduza até atingir ou ficar abaixo do mínimo; confira o LED e o alerta no dashboard após estabilização.
 4. Reponha massa; confira que o alerta se apaga e o histórico registra reposição.
 5. Altere o mínimo pelo dashboard e confira a reação do LED no Wokwi e a configuração retornada na telemetria.
@@ -109,11 +125,11 @@ O servidor escuta somente no próprio notebook (`127.0.0.1`). Nesta etapa não h
 
 ## Primeiro teste pelo dashboard
 
-1. Clique em **100 g — recipiente vazio**. Aguarde a leitura estável e clique em **Tarar balança**. Confirme que a massa líquida fica próxima de zero.
-2. Use massa unitária **5 g** e estoque mínimo **50 peças**.
-3. Clique em **1.100 g — exemplo normal**. Após aproximadamente um segundo, a estimativa será de **200 peças**, sem alerta.
-4. Clique em **275 g — exemplo baixo**. A estimativa será de **35 peças**; o indicador de LED acende e aparece o alerta de reposição. O histórico registra uma retirada de **165 peças**.
-5. Clique em **1.200 g — exemplo reposição**. A estimativa será de **220 peças**; o alerta se apaga e o histórico registra uma reposição de **185 peças**.
+1. Selecione o material e clique em **Preparar contagem**, se necessário. Clique em **100 g**, aguarde estabilizar e clique em **Tarar balança**.
+2. Salve massa unitária **5 g** e estoque mínimo **50 peças**.
+3. Clique em **1.100 g**. A estimativa será de **200 peças**, ainda sem registrar eventos. Clique em **Iniciar monitoramento** para registrar o estoque inicial.
+4. Clique em **275 g**. A estimativa será de **35 peças**, com LED e alerta de reposição. O histórico registra retirada de **165 peças**.
+5. Clique em **1.200 g**. A estimativa será de **220 peças**, com reposição de **185 peças** e alerta desligado.
 6. Altere o estoque mínimo para **220**: o alerta deve acender também quando a quantidade for exatamente igual ao mínimo.
 
 Os exemplos pressupõem tara próxima de 100 g e escala nominal. Os valores podem diferir ligeiramente devido à quantização simulada do ADC. Se calibrar com uma referência incompatível com a massa de teste, a relação entre massa de entrada e leitura também muda.
@@ -122,14 +138,14 @@ Os exemplos pressupõem tara próxima de 100 g e escala nominal. Os valores pode
 
 1. Deixe o recipiente vazio a 100 g e tare a balança.
 2. Altere a massa total para **150 g**, representando o recipiente mais **10 parafusos** de aproximadamente 5 g.
-3. Aguarde estabilizar, abra **Descobrir a massa por uma amostra**, informe **10** e clique em **Calcular e aplicar**.
-4. O núcleo calcula `massa_líquida / quantidade_da_amostra` e aplica o resultado como massa unitária. A alteração é um ajuste de medição, não consumo.
+3. Aguarde estabilizar; em **Aprender peso por amostra**, informe **10** e clique em **Aprender peso por peça**.
+4. O núcleo calcula `massa_líquida / quantidade_da_amostra`; o perfil salva o valor confirmado. Coloque o lote completo e só então inicie o monitoramento. A preparação não gera consumo.
 
 Usar mais peças na amostra reduz o impacto da resolução da leitura. A estimativa pressupõe peças de massas semelhantes.
 
 ### Calibração simulada
 
-Tare o recipiente vazio a 100 g. Coloque uma massa conhecida de 500 g, ajustando a massa total para 600 g. Aguarde estabilizar, abra **Calibrar com uma massa conhecida**, informe 500 g e confirme.
+Durante a preparação, tare o recipiente vazio a 100 g. Coloque uma massa conhecida de 500 g, ajustando a massa total para 600 g. Aguarde estabilizar, abra **Calibração com peso conhecido**, informe 500 g e confirme.
 
 O firmware calcula `gramas_por_unidade_bruta = massa_de_referência / (leitura_bruta_atual - leitura_bruta_da_tara)`. A tara permanece armazenada em unidades brutas e é convertida com o mesmo fator; a aplicação não desconta a tara novamente. A simulação parte de um zero ideal e escala nominal de 0–5.000 g. A montagem física precisará de procedimento próprio para zero, fator e capacidade do sensor.
 
@@ -193,14 +209,21 @@ O potenciômetro representa uma massa nominal de até 5 kg. Não mede parafusos 
 Envie estes comandos no monitor serial, **um por linha**, terminando com Enter:
 
 ```text
+prepare demo-preparacao-1
 tare demo-tara-1
+reset_tare demo-reset-tara-1
 unit demo-unidade-1 5
 minimum demo-minimo-1 50
 calibrate demo-calibracao-1 500
 sample_unit demo-amostra-1 10
+start_monitoring demo-inicio-1
 ```
 
 Cada comando deve ter um identificador diferente. `calibrate` exige uma massa de referência colocada após tarar; `sample_unit` exige uma amostra conhecida após tarar. A resposta JSON tem `type: "ack"`, `command_id`, `ok` e `message`. O monitor também recebe telemetria JSON a cada 500 ms. Os oito comandos mais recentes são deduplicados no núcleo por identificador.
+
+`reset_tare` remove a tara sem exigir estabilidade; use para recuperar uma tara incorreta e depois execute uma nova tara com o recipiente vazio. Os exemplos acima têm pré-condições diferentes e não formam uma sequência automática.
+
+`prepare` inicia a preparação e remove a tara anterior; `start_monitoring` registra o estoque inicial após tara e estabilização. No modo conectado ao dashboard, use os botões do painel para preparar/iniciar: eles associam a contagem ao material e verificam a preparação de destino. Os exemplos de monitor serial são úteis para teste direto do dispositivo, sem cadastro de material no banco.
 
 Os parâmetros do ESP32 ficam em RAM e voltam ao padrão ao reiniciar a simulação. A persistência em NVS será acrescentada em outra etapa. No modo offline, salvar parâmetros no SQLite do dashboard não configura o ESP32, pois são instâncias separadas.
 
@@ -218,6 +241,7 @@ app/server.py          API local, processo simulado e SQLite
 app/mqtt_transport.py  cliente Paho, assinaturas e validação da telemetria
 app/mqtt_config.py     configuração compartilhada do broker e tópicos
 app/autonomy.py        períodos acompanhados e previsão de autonomia
+app/materials.py       perfis, identificação de contagens e migração do histórico
 app/static/            dashboard HTML/CSS/JS, sem CDN
 examples/              histórico fictício isolado para demonstrar a previsão
 scripts/               compilação, preparação do Wokwi e diagnóstico MQTT
@@ -235,4 +259,6 @@ Os testes usam bancos temporários e cobrem estabilização, limite de alerta, r
 
 Os testes de autonomia usam relógio controlado para verificar 24 horas mínimas, janela de 7 dias, dias sem consumo, interrupções, persistência, deduplicação e mudanças de referência. O contrato HTTP verifica também que consultar o exemplo não altera nenhuma tabela do banco nem o estado monitorado.
 
-O núcleo compila com `-Wall -Wextra -Werror`. O usuário validou a execução no Wokwi, o histórico do dashboard local e a conexão MQTT real usando a internet do celular. O ambiente do agente bloqueia sockets; os testes automatizados usam transporte em memória e não substituem essa validação de rede. A nova previsão foi verificada com relógio controlado, sem aguardar 24 horas reais. Não houve teste físico com HX711 nem inspeção visual desta atualização do painel.
+O núcleo compila com `-Wall -Wextra -Werror`. A suíte atual passou em **75 testes**, incluindo preparação sem histórico/LED, amostra de 10 e lote de 80, perfis e filtros, migração preservando registros, retomada MQTT e comandos atrasados. O fluxo pelos botões foi conferido em Firefox com dois materiais, retirada após iniciar e reset de tara durante monitoramento; o layout foi inspecionado em desktop e celular, com os dois temas e sem transbordamento horizontal no celular.
+
+O usuário validou anteriormente a integração MQTT real com internet do celular. Os testes desta alteração usam o transporte MQTT em memória e não substituem uma nova execução no Wokwi; copiar o sketch atualizado antes de conferir a integração. A previsão é testada com relógio controlado, sem aguardar 24 horas reais. Ainda não houve teste físico com HX711.

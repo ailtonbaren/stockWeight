@@ -50,6 +50,10 @@ def validate_telemetry(message, device_id):
         numeric(message.get(field), nullable=not message["valid"])
     numeric(message.get("tare_g"))
     quantity = message.get("quantity")
+    monitoring = message.get("monitoring", True)
+    if "monitoring" in message or "measurement_id" in message:
+        if type(monitoring) is not bool or not isinstance(message.get("measurement_id"), str) or not IDENTIFIER.fullmatch(message["measurement_id"]):
+            raise ValueError("Identificação da contagem inválida.")
     if quantity is not None:
         integer(quantity, 0, 1000000)
     alert = message.get("alert")
@@ -68,9 +72,11 @@ def validate_telemetry(message, device_id):
         raise ValueError("Quantidade estável indisponível.")
     if (not message["valid"] or not message["container_present"]) and (quantity is not None or alert is not None):
         raise ValueError("Leitura indisponível com quantidade ativa.")
-    if quantity is not None and alert != (quantity <= settings["minimum"]):
+    if quantity is not None and alert != (monitoring and quantity <= settings["minimum"]):
         raise ValueError("Alerta incoerente com o estoque.")
     event = message.get("event")
+    if not monitoring and event is not None:
+        raise ValueError("Preparação não pode gerar movimentações de estoque.")
     if event is not None:
         if not isinstance(event, dict) or event.get("kind") not in {"initial", "adjustment", "withdrawal", "restock"}:
             raise ValueError("Evento inválido.")

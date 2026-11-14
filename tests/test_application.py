@@ -13,6 +13,7 @@ class ApplicationTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory(prefix="stockweight-test-")
         self.database = Path(self.directory.name) / "history.sqlite3"
         self.application = Application(self.database, background=False)
+        self.application.execute({"command": "unit", "value": 5})
         self.clock = 0
 
     def tearDown(self):
@@ -29,7 +30,9 @@ class ApplicationTests(unittest.TestCase):
     def normal(self):
         self.settle(100)
         self.application.execute({"command": "tare", "command_id": "empty"})
-        return self.settle(1100)
+        self.settle(1100)
+        self.application.execute({"command": "start_monitoring"})
+        return self.application.state()
 
     def request(self, method, path, body=None, *, origin="http://localhost:8765"):
         # Exercise the real HTTP request parser and handler using memory streams;
@@ -57,7 +60,8 @@ class ApplicationTests(unittest.TestCase):
         state = self.application.state()
         self.assertEqual(state["events"], events)
         self.assertEqual(state["telemetry"]["settings"]["minimum"], 35)
-        self.assertTrue(state["telemetry"]["settings"]["tare_set"])
+        self.assertFalse(state["telemetry"]["settings"]["tare_set"])
+        self.assertEqual(state["workflow"]["phase"], "preparing")
         self.assertEqual(state["simulation"]["mass_g"], 950)
 
     def test_event_deduplication_and_consumption_exclude_restocks(self):
@@ -70,8 +74,30 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(state["autonomy"]["consumed_pieces"], 30)
         self.assertIsNone(state["autonomy"]["days"])
 
+    def test_reset_tare_http_recovers_wrong_tare_and_persists_after_restart(self):
+        self.settle(2000)
+        self.assertTrue(self.application.execute({"command": "tare"})["ok"])
+        self.settle(2000)
+        self.assertEqual(self.settle(200)["telemetry"]["status"], "container_removed")
+        status, _, response = self.request("POST", "/api/command", {"command": "reset_tare"})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(response)["ok"])
+        state = self.settle(200)
+        self.assertEqual(state["telemetry"]["quantity"], 40)
+        self.assertEqual(state["events"], [])
+        self.assertFalse(any(event["kind"] in ("withdrawal", "restock") for event in state["events"]))
+        self.assertEqual(state["autonomy"]["consumed_pieces"], 0)
+        self.application.close()
+        self.application = Application(self.database, background=False)
+        state = self.settle(200)
+        self.assertEqual(state["telemetry"]["settings"]["tare_raw"], 0)
+        self.assertFalse(state["telemetry"]["settings"]["tare_set"])
+        self.assertTrue(self.application.execute({"command": "tare"})["ok"])
+        self.assertEqual(self.settle(200)["telemetry"]["quantity"], 0)
+
     def test_duplicate_command_is_idempotent_and_payload_cannot_change(self):
         self.normal()
+        self.application.prepare_material({})
         body = {"command": "unit", "value": 10, "command_id": "one-command"}
         first = self.application.execute(body)
         self.settle(1100)
@@ -147,9 +173,11 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(self.application.state()["autonomy"]["status"], "unavailable")
         self.application.change_simulation({"connected": True})
         self.settle(950)
+        self.application.prepare_material({})
+        self.settle(950)
         self.application.execute({"command": "tare"})
         result = self.settle(950)["autonomy"]
-        self.assertEqual(result["status"], "insufficient_data")
+        self.assertEqual(result["status"], "preparing")
         self.assertEqual(result["consumed_pieces"], 0)
 
 

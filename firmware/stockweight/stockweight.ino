@@ -52,6 +52,7 @@ void setup() {
   char id[24];
   snprintf(id, sizeof(id), "boot-%08lx", static_cast<unsigned long>(esp_random()));
   session = id;
+  engine.prepare("boot-preparation");
   serialLine.reserve(192);
 #ifdef STOCKWEIGHT_MQTT
   network.begin(session);

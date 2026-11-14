@@ -12,13 +12,14 @@ import sqlite3
 import subprocess
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 import uuid
 
 from scripts.build_simulator import ROOT, build
 from app.mqtt_config import DEFAULT_CONFIG, MqttConfig, load_config
 from app.mqtt_transport import MqttTransport, validate_telemetry
-from app.autonomy import AutonomyTracker, example_history
+from app.autonomy import AutonomyTracker, calculate, example_history
+from app.materials import Materials
 
 STATIC = ROOT / "app/static"
 
@@ -47,6 +48,7 @@ class Application:
         if mode == "mqtt" and mqtt_config is None:
             raise ValueError("Informe a configuração MQTT.")
         self.lock = threading.RLock()
+        self.control_lock = threading.RLock()
         self.stop = threading.Event()
         self.thread = None
         self.process = None
@@ -58,12 +60,14 @@ class Application:
         self.history_warning = None
         self.remote_sequence = 0
         self.remote_event_sequence = 0
+        self.remote_context = None
         self.retired_sessions = set()
         self.error = None
         self.latest = None
         self.received_at = None
         self.received_monotonic = 0.0
         self.last_reading_saved = -math.inf
+        self.last_reading_context = None
         self.started = time.monotonic()
         self.session = "local-" + uuid.uuid4().hex if mode == "local_simulator" else None
         database.parent.mkdir(parents=True, exist_ok=True)
@@ -87,8 +91,13 @@ class Application:
                 fingerprint TEXT NOT NULL, acknowledgement TEXT NOT NULL
             );
         """)
-        scope = "mqtt:" + mqtt_config.topic if mode == "mqtt" else "local_simulator"
-        self.autonomy = AutonomyTracker(self.db, scope, max_gap=5 if mode == "mqtt" else 3, clock=self.clock)
+        self.scope = "mqtt:" + mqtt_config.topic if mode == "mqtt" else "local_simulator"
+        saved_settings = self._load("settings" if mode == "local_simulator" else "settings:" + mqtt_config.topic, None)
+        self.materials = Materials(self.db, self.scope,
+                                   legacy_unit=saved_settings["unit_g"] if saved_settings else None,
+                                   legacy_minimum=saved_settings["minimum"] if saved_settings else 50)
+        self.trackers = {}
+        self.autonomy = self._tracker(self.materials.current["material_id"])
         self.simulation = self._load("simulation", {"mass_g": 100.0, "fault": False, "connected": True})
         if mode == "mqtt":
             # An interrupted request must not be executed again on server restart.
@@ -121,6 +130,7 @@ class Application:
                 self.close()
                 raise ValueError("Não foi possível restaurar a configuração persistida.")
         self.tick()
+        self.prepare_material({"material_id": self.materials.current["material_id"]})
         if background:
             self.thread = threading.Thread(target=self._run, daemon=True, name="local-device")
             self.thread.start()
@@ -143,22 +153,38 @@ class Application:
             raise RuntimeError("O simulador local parou de responder.")
         return json.loads(response)
 
+    def _tracker(self, material_id):
+        if material_id not in self.trackers:
+            self.trackers[material_id] = AutonomyTracker(
+                self.db, self.scope + ":material:" + material_id,
+                max_gap=5 if self.mode == "mqtt" else 3, clock=self.clock)
+        return self.trackers[material_id]
+
     def _accept(self, telemetry):
         now = self.clock()
-        self.autonomy.observe(telemetry, now)
         self.latest = telemetry
         self.received_at = timestamp(now)
         self.received_monotonic = time.monotonic()
+        context = self.materials.context(telemetry.get("measurement_id"))
+        monitoring = (context and context["phase"] == "monitoring" and telemetry.get("monitoring") is True
+                      and context["session_id"] == self.session)
         event = telemetry["event"]
-        if event:
-            self.db.execute("INSERT OR IGNORE INTO events (session_id, sequence, received_at, kind, delta, quantity) VALUES (?, ?, ?, ?, ?, ?)",
+        if monitoring:
+            observation = {**telemetry, "session_id": self.session + ":" + context["id"]}
+            self._tracker(context["material_id"]).observe(observation, now)
+        else:
+            for tracker in self.trackers.values():
+                tracker.pause()
+        if monitoring and event:
+            self.db.execute("INSERT OR IGNORE INTO events (session_id, sequence, received_at, kind, delta, quantity, material_id, run_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                             (self.storage_session(), event["sequence"], self.received_at,
-                             event["kind"], event["delta"], event["quantity"]))
-        if self.received_monotonic - self.last_reading_saved >= 1.0:
-            self.db.execute("INSERT INTO readings (received_at, session_id, gross_g, net_g, quantity, stable, valid) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                             event["kind"], event["delta"], event["quantity"], context["material_id"], context["id"]))
+        if monitoring and (self.last_reading_context != context["id"] or self.received_monotonic - self.last_reading_saved >= 1.0):
+            self.db.execute("INSERT INTO readings (received_at, session_id, gross_g, net_g, quantity, stable, valid, material_id, run_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             (self.received_at, self.storage_session(), telemetry["gross_g"],
-                             telemetry["net_g"], telemetry["quantity"], telemetry["stable"], telemetry["valid"]))
+                             telemetry["net_g"], telemetry["quantity"], telemetry["stable"], telemetry["valid"], context["material_id"], context["id"]))
             self.last_reading_saved = self.received_monotonic
+            self.last_reading_context = context["id"]
         key = "settings" if self.mode == "local_simulator" else "settings:" + self.mqtt_config.topic
         if self._load(key, None) != telemetry["settings"]:
             self._save(key, telemetry["settings"])
@@ -183,7 +209,8 @@ class Application:
             if not connected:
                 # A new live reading is needed after reconnecting to the broker.
                 self.received_monotonic = 0
-                self.autonomy.pause()
+                for tracker in self.trackers.values():
+                    tracker.pause()
                 self.db.commit()
 
     def receive_mqtt(self, kind, message):
@@ -212,7 +239,14 @@ class Application:
                 if message["sequence"] <= self.remote_sequence:
                     return
                 self.remote_sequence = message["sequence"]
+                context_id = message.get("measurement_id")
                 event = message.get("event")
+                if context_id != self.remote_context:
+                    self.remote_context = context_id
+                    saved_sequence = self.db.execute(
+                        "SELECT COALESCE(MAX(sequence), 0) FROM events WHERE session_id = ? AND run_id = ?",
+                        (self.storage_session(), context_id)).fetchone()[0]
+                    self.remote_event_sequence = saved_sequence or (event["sequence"] - 1 if event and event["kind"] == "initial" else 0)
                 if event:
                     if event["sequence"] > self.remote_event_sequence + 1:
                         self.history_warning = "Há movimentações anteriores sem registro nesta sessão. O histórico recebido pode estar incompleto."
@@ -277,7 +311,123 @@ class Application:
             self.tick()
             return updated
 
+    def create_material(self, body):
+        with self.control_lock, self.lock:
+            material = self.materials.create(body.get("name"))
+            self.db.commit()
+            return {"ok": True, "material": material, "message": "Material cadastrado. Selecione-o e prepare a contagem."}
+
+    def workflow(self):
+        material = self.materials.get()
+        reading = self.latest or {}
+        context = self.materials.context(self.materials.current["context_id"])
+        supported = type(reading.get("monitoring")) is bool and isinstance(reading.get("measurement_id"), str)
+        ready = bool(context and context["session_id"] == self.session and reading.get("measurement_id") == context["id"])
+        monitoring = ready and reading.get("monitoring") is True and context["phase"] == "monitoring"
+        settings = reading.get("settings", {})
+        unit_ready = bool(material["unit_g"] is not None and math.isclose(material["unit_g"], settings.get("unit_g", 0), rel_tol=1e-7, abs_tol=1e-7))
+        can_start = bool(self.connected() and ready and not monitoring and settings.get("tare_set") and
+                         reading.get("valid") and reading.get("stable") and unit_ready and settings.get("minimum") == material["minimum"])
+        if not self.connected():
+            message = "Aguarde a conexão para preparar a contagem."
+        elif not supported:
+            message = "Atualize o sketch do Wokwi para usar a preparação por material."
+        elif not ready:
+            message = "Selecione o material e clique em Preparar contagem para configurar o dispositivo."
+        elif monitoring:
+            message = "Monitoramento ativo. As mudanças estáveis são registradas para este material."
+        elif not settings.get("tare_set"):
+            message = "Coloque somente o recipiente vazio, aguarde estabilizar e tare a balança."
+        elif not unit_ready:
+            message = "Pese uma amostra conhecida e informe a quantidade, ou salve a massa por peça."
+        elif not reading.get("stable"):
+            message = "Aguarde o peso estabilizar. A preparação não gera movimentações."
+        else:
+            message = "Coloque o lote completo. Confira a estimativa e inicie o monitoramento."
+        return {"phase": "monitoring" if monitoring else "preparing", "supported": supported,
+                "ready": ready, "can_start": can_start, "unit_ready": unit_ready,
+                "material": material, "message": message, "context_id": self.materials.current["context_id"]}
+
+    def prepare_material(self, body):
+        with self.control_lock:
+            with self.lock:
+                material = self.materials.get(body.get("material_id"))
+                command_id = body.get("command_id", uuid.uuid4().hex)
+                self._check_workflow_id(command_id, material["id"], "preparing")
+                previous = self.materials.context(command_id)
+                if not previous:
+                    if not self.connected():
+                        raise ValueError("Aguarde o dispositivo conectar para preparar a contagem.")
+                    if not self.workflow()["supported"]:
+                        raise ValueError("Atualize o sketch do Wokwi para usar a preparação por material.")
+                    self.materials.select(command_id, material["id"], self.session, "preparing")
+                    self.autonomy = self._tracker(material["id"])
+                    self.history_warning = None
+            acknowledgement = self._execute({"command": "prepare", "command_id": command_id})
+            if previous or not acknowledgement["ok"]:
+                return acknowledgement
+            # Only configure the device after it confirms preparation. A saved
+            # unit is reused, while the tare belongs to the new empty container.
+            for action, value in (("minimum", material["minimum"]), ("unit", material["unit_g"])):
+                if value is not None:
+                    result = self._execute({"command": action, "value": value})
+                    if not result["ok"]:
+                        return {**result, "message": "Preparação iniciada, mas a configuração não foi confirmada. Prepare novamente. " + result["message"]}
+            return acknowledgement
+
+    def _check_workflow_id(self, command_id, material_id, phase):
+        if not isinstance(command_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", command_id):
+            raise ValueError("Identificador de comando inválido.")
+        context = self.materials.context(command_id)
+        if context and (context["material_id"] != material_id or context["phase"] != phase):
+            raise ValueError("Identificador já usado para outra contagem.")
+        if not context and self.db.execute("SELECT 1 FROM commands WHERE command_id = ?", (command_id,)).fetchone():
+            raise ValueError("Identificador já usado para outro comando.")
+
+    def start_monitoring(self, body):
+        with self.control_lock:
+            with self.lock:
+                material = self.materials.get()
+                command_id = body.get("command_id", uuid.uuid4().hex)
+                self._check_workflow_id(command_id, material["id"], "monitoring")
+                if self.materials.context(command_id):
+                    saved = self.db.execute("SELECT fingerprint FROM commands WHERE command_id = ?", (command_id,)).fetchone()
+                    if not saved:
+                        raise ValueError("Início não confirmado. Prepare a contagem novamente.")
+                    expected_context = json.loads(saved[0])[-1]
+                else:
+                    if not self.workflow()["can_start"]:
+                        raise ValueError("Tare o recipiente, defina a massa por peça e aguarde o lote estabilizar antes de iniciar.")
+                    expected_context = self.materials.current["context_id"]
+                    self.materials.select(command_id, material["id"], self.session, "monitoring")
+            return self._execute({"command": "start_monitoring", "command_id": command_id, "value": expected_context})
+
     def execute(self, body):
+        with self.control_lock:
+            action = body.get("command")
+            if action == "prepare":
+                return self.prepare_material(body)
+            if action == "start_monitoring":
+                return self.start_monitoring(body)
+            with self.lock:
+                if self.db.execute("SELECT 1 FROM commands WHERE command_id = ?", (body.get("command_id"),)).fetchone():
+                    return self._execute(body)
+                flow = self.workflow()
+                material_id = flow["material"]["id"]
+                if not flow["ready"]:
+                    raise ValueError("Prepare a contagem do material antes de ajustar a balança.")
+                if flow["phase"] == "monitoring" and action not in ("minimum", "reset_tare"):
+                    raise ValueError("Clique em Preparar nova contagem antes de alterar a medição.")
+            result = self._execute(body)
+            if result["ok"]:
+                with self.lock:
+                    if action in ("unit", "sample_unit"):
+                        self.materials.save_settings(material_id, unit_g=number(result.get("unit_g"), 0.01, 5000))
+                    elif action == "minimum":
+                        self.materials.save_settings(material_id, minimum=number(result.get("minimum"), 0, 1000000, integer=True))
+            return result
+
+    def _execute(self, body):
         if self.mode == "mqtt":
             return self.execute_remote(body)
         with self.lock:
@@ -285,7 +435,7 @@ class Application:
             command_id = body.get("command_id", uuid.uuid4().hex)
             if not isinstance(command_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", command_id):
                 raise ValueError("Identificador de comando inválido.")
-            if action not in ("tare", "unit", "minimum", "calibrate", "sample_unit"):
+            if action not in ("prepare", "start_monitoring", "tare", "reset_tare", "unit", "minimum", "calibrate", "sample_unit"):
                 raise ValueError("Comando desconhecido.")
             value = body.get("value")
             if action in ("unit", "calibrate"):
@@ -300,7 +450,7 @@ class Application:
                 return json.loads(previous["acknowledgement"])
             if not self.simulation["connected"] or self.error:
                 raise ValueError("O simulador está desconectado. Reconecte antes de enviar comandos.")
-            line = f"{action} {command_id}" + ("" if action == "tare" else f" {value}")
+            line = f"{action} {command_id}" + ("" if action in ("prepare", "tare", "reset_tare") else f" {value}")
             acknowledgement = self._exchange(line)
             acknowledgement["target"] = "local_simulator"
             self.db.execute("INSERT INTO commands VALUES (?, ?, ?, ?)",
@@ -313,7 +463,7 @@ class Application:
         command_id = body.get("command_id", uuid.uuid4().hex)
         if not isinstance(command_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", command_id):
             raise ValueError("Identificador de comando inválido.")
-        if action not in ("tare", "unit", "minimum", "calibrate", "sample_unit"):
+        if action not in ("prepare", "start_monitoring", "tare", "reset_tare", "unit", "minimum", "calibrate", "sample_unit"):
             raise ValueError("Comando desconhecido.")
         value = body.get("value")
         if action in ("unit", "calibrate"):
@@ -339,7 +489,11 @@ class Application:
                                 (command_id, timestamp(), fingerprint, json.dumps(initial)))
                 self.db.commit()
                 # Format floating-point numbers without locale or scientific-notation surprises.
-                line = f"{action} {command_id}" + ("" if action == "tare" else " " + format(value, ".12g"))
+                line = f"{action} {command_id}"
+                if action == "start_monitoring":
+                    line += " " + value
+                elif action not in ("prepare", "tare", "reset_tare"):
+                    line += " " + format(value, ".12g")
                 try:
                     self.transport.publish_command(self.session, line)
                 except (RuntimeError, OSError) as error:
@@ -358,27 +512,35 @@ class Application:
             self.pending.pop(command_id, None)
             return response
 
-    def state(self):
+    def state(self, *, history_material=None):
         with self.lock:
             connected = self.connected()
-            if self.mode == "mqtt":
-                prefix = f"mqtt:{self.mqtt_config.topic}:"
-                rows = self.db.execute("SELECT * FROM events WHERE substr(session_id, 1, ?) = ? ORDER BY id DESC LIMIT 100", (len(prefix), prefix))
-            else:
-                rows = self.db.execute("SELECT * FROM events WHERE substr(session_id, 1, 5) != 'mqtt:' ORDER BY id DESC LIMIT 100")
+            flow = self.workflow()
+            selected = flow["material"]["id"] if history_material is None else history_material
+            if selected != "all":
+                self.materials.get(selected)
+            rows = self.db.execute(
+                "SELECT e.*, m.name AS material_name FROM events e JOIN materials m ON m.id = e.material_id "
+                "WHERE m.scope = ? AND (? = 'all' OR e.material_id = ?) ORDER BY e.id DESC LIMIT 100",
+                (self.scope, selected, selected))
             events = [dict(row) for row in rows]
-            readings = [dict(row) for row in self.db.execute("SELECT received_at, quantity, stable FROM readings WHERE session_id = ? ORDER BY id DESC LIMIT 120", (self.storage_session(),))][::-1]
+            readings = [dict(row) for row in self.db.execute("SELECT received_at, quantity, stable FROM readings WHERE run_id = ? AND material_id = ? ORDER BY id DESC LIMIT 120", (flow["context_id"], flow["material"]["id"]))][::-1]
             return {
                 "mode": self.mode, "connected": connected, "wokwi_connected": self.mode == "mqtt" and connected,
                 "mqtt_connected": self.broker_connected, "error": self.error, "last_reading_at": self.received_at,
                 "telemetry": self.latest, "simulation": dict(self.simulation), "events": events,
                 "readings": readings, "autonomy": self._autonomy(), "history_warning": self.history_warning,
+                "materials": self.materials.list(), "workflow": flow, "history_material": selected,
                 "mqtt": {"host": self.mqtt_config.host, "port": self.mqtt_config.port, "topic": self.mqtt_config.topic} if self.mqtt_config else None,
             }
 
     def _autonomy(self):
         reading = self.latest or {}
-        available = self.connected() and reading.get("valid") and reading.get("stable") and reading.get("container_present")
+        if self.workflow()["phase"] != "monitoring":
+            result = calculate([], [], None, self.clock(), available=False)
+            result.update(status="preparing", reference_reason="preparing")
+            return result
+        available = self.workflow()["phase"] == "monitoring" and self.connected() and reading.get("valid") and reading.get("stable") and reading.get("container_present")
         return self.autonomy.summary(reading.get("quantity"), available=bool(available))
 
     def close(self):
@@ -388,7 +550,8 @@ class Application:
         if self.thread:
             self.thread.join(timeout=2)
         with self.lock:
-            self.autonomy.pause()
+            for tracker in self.trackers.values():
+                tracker.pause()
             self.db.commit()
             for pending in self.pending.values():
                 pending["event"].set()
@@ -417,7 +580,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
         if path == "/api/state":
-            self.send_json(200, self.server.application.state())
+            try:
+                selected = parse_qs(urlsplit(self.path).query).get("history_material", [None])[0]
+                self.send_json(200, self.server.application.state(history_material=selected))
+            except ValueError as error:
+                self.send_json(400, {"error": str(error)})
             return
         if path == "/api/autonomy/example":
             self.send_json(200, example_history())
@@ -458,6 +625,8 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/command":
                 result = self.server.application.execute(body)
                 self.send_json(200 if result["ok"] else 504 if result.get("status") == "timeout" else 409, result)
+            elif self.path == "/api/materials":
+                self.send_json(201, self.server.application.create_material(body))
             else:
                 self.send_json(404, {"error": "Recurso não encontrado."})
         except (ValueError, UnicodeDecodeError) as error:

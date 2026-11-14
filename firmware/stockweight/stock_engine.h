@@ -75,6 +75,12 @@ class StockEngine {
       return;
     }
     const int quantity = static_cast<int>(estimate);
+    if (!monitoring_) {
+      has_quantity_ = true;
+      quantity_ = quantity;
+      accepted_net_g_ = net;
+      return;
+    }
     if (!has_baseline_) {
       addEvent(ever_baseline_ ? "adjustment" : "initial", 0, quantity);
       has_baseline_ = ever_baseline_ = true;
@@ -95,6 +101,41 @@ class StockEngine {
     settings_.tare_set = true;
     resetBaseline();
     return {true, "Tara aplicada. Aguarde a estabilização."};
+  }
+
+  Result prepare(const std::string& measurement_id) {
+    workflow_ = true;
+    monitoring_ = false;
+    measurement_id_ = measurement_id;
+    settings_.tare_raw = 0;
+    settings_.tare_set = false;
+    ever_baseline_ = false;
+    resetBaseline();
+    return {true, "Preparação iniciada. Tare o recipiente vazio e defina a massa por peça."};
+  }
+
+  Result startMonitoring(const std::string& measurement_id, const std::string& expected_preparation = "") {
+    if (!expected_preparation.empty() && expected_preparation != measurement_id_)
+      return {false, "A preparação mudou. Confira o material e inicie novamente pelo painel."};
+    if (monitoring_) return {false, "O monitoramento já está ativo. Prepare uma nova contagem para reiniciar."};
+    if (!settings_.tare_set || !valid_ || !stable_ || !container_present_ || !has_quantity_)
+      return {false, "Tare o recipiente e aguarde o lote estabilizar antes de iniciar."};
+    monitoring_ = true;
+    measurement_id_ = measurement_id;
+    has_baseline_ = ever_baseline_ = true;
+    accepted_net_g_ = std::fmax(0.0, netGrams());
+    addEvent("initial", 0, quantity_);
+    return {true, "Monitoramento iniciado com o estoque atual."};
+  }
+
+  Result resetTare() {
+    // Recovery must work even when an excessive tare hides the container.
+    if (!settings_.tare_set && settings_.tare_raw == 0)
+      return {true, "A tara já está zerada."};
+    settings_.tare_raw = 0;
+    settings_.tare_set = false;
+    resetBaseline();
+    return {true, "Tara resetada. Aguarde estabilizar e tare o recipiente vazio."};
   }
 
   Result calibrate(double reference_g) {
@@ -136,7 +177,7 @@ class StockEngine {
   }
 
   bool alert() const {
-    return valid_ && container_present_ && has_quantity_ && quantity_ <= settings_.minimum;
+    return monitoring_ && valid_ && container_present_ && has_quantity_ && quantity_ <= settings_.minimum;
   }
 
   std::string telemetry(const std::string& device, const std::string& session, uint32_t sequence) const {
@@ -145,6 +186,8 @@ class StockEngine {
         << "{\"type\":\"telemetry\",\"device_id\":\"" << device
         << "\",\"session_id\":\"" << session << "\",\"sequence\":" << sequence
         << ",\"uptime_ms\":" << now_ms_ << ",\"valid\":" << boolean(valid_)
+        << ",\"monitoring\":" << boolean(monitoring_)
+        << ",\"measurement_id\":\"" << measurement_id_ << "\""
         << ",\"stable\":" << boolean(stable_)
         << ",\"container_present\":" << boolean(valid_ && container_present_)
         << ",\"status\":\"" << (!valid_ ? "invalid" : !container_present_ ? "container_removed" : stable_ ? "ready" : "settling")
@@ -154,11 +197,11 @@ class StockEngine {
         << ",\"net_g\":" << (valid_ ? number(netGrams()) : "null")
         << ",\"quantity\":" << (valid_ && container_present_ && has_quantity_ ? std::to_string(quantity_) : "null")
         << ",\"alert\":" << (valid_ && container_present_ && has_quantity_ ? boolean(alert()) : "null")
-        << ",\"settings\":{\"unit_g\":" << settings_.unit_g << ",\"minimum\":" << settings_.minimum
+        << ",\"settings\":{\"unit_g\":" << std::setprecision(10) << settings_.unit_g << std::setprecision(5) << ",\"minimum\":" << settings_.minimum
         << ",\"grams_per_raw\":" << std::setprecision(10) << settings_.grams_per_raw << std::setprecision(5)
         << ",\"tare_raw\":" << settings_.tare_raw
         << ",\"tare_set\":" << boolean(settings_.tare_set) << ",\"calibrated\":" << boolean(settings_.calibrated) << "},\"event\":";
-    if (!event_seq_) out << "null";
+    if (!monitoring_ || !event_seq_) out << "null";
     else out << "{\"sequence\":" << event_seq_ << ",\"kind\":\"" << event_kind_
              << "\",\"delta\":" << event_delta_ << ",\"quantity\":" << event_quantity_ << "}";
     out << "}";
@@ -167,6 +210,11 @@ class StockEngine {
 
  private:
   Settings settings_;
+  // Standalone core clients retain the original behavior; the application and
+  // ESP32 explicitly enter preparation on boot before accepting stock changes.
+  bool monitoring_ = true;
+  bool workflow_ = false;
+  std::string measurement_id_ = "legacy";
   double samples_[kWindowSize] = {};
   unsigned count_ = 0, cursor_ = 0;
   double raw_ = 0, last_stable_raw_ = 0, accepted_net_g_ = 0;
@@ -186,7 +234,11 @@ class StockEngine {
   }
   double netGrams() const { return (raw_ - settings_.tare_raw) * settings_.grams_per_raw; }
   void clearWindow() { count_ = cursor_ = 0; stable_ = false; }
-  void resetBaseline() { has_baseline_ = has_quantity_ = false; clearWindow(); }
+  void resetBaseline() {
+    if (workflow_) monitoring_ = false;
+    has_baseline_ = has_quantity_ = false;
+    clearWindow();
+  }
   void addEvent(const char* kind, int delta, int quantity) {
     ++event_seq_;
     event_kind_ = kind;
@@ -195,8 +247,9 @@ class StockEngine {
   }
 };
 
-// Shared command protocol for Serial now, and an MQTT transport in a later step.
-// Commands: tare ID | calibrate ID GRAMS | unit ID GRAMS | minimum ID INTEGER
+// Shared command protocol for Serial and MQTT.
+// Commands: prepare ID | start_monitoring ID [PREPARATION] | tare ID | reset_tare ID
+//           calibrate ID GRAMS | unit ID GRAMS | minimum ID INTEGER
 //           sample_unit ID INTEGER
 inline std::string command(StockEngine& engine, const std::string& line) {
   std::istringstream input(line);
@@ -206,8 +259,14 @@ inline std::string command(StockEngine& engine, const std::string& line) {
       id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") == std::string::npos;
   Result result = {false, "Comando inválido."};
   if (!id_ok) return "{\"type\":\"ack\",\"command_id\":null,\"ok\":false,\"message\":\"Identificador inválido.\"}";
-  if (action == "tare") {
-    if (!(input >> extra)) result = engine.tare();
+  if (action == "prepare") {
+    if (!(input >> extra)) result = engine.prepare(id);
+  } else if (action == "start_monitoring") {
+    std::string expected;
+    if (!(input >> expected)) result = engine.startMonitoring(id);
+    else if (!(input >> extra)) result = engine.startMonitoring(id, expected);
+  } else if (action == "tare" || action == "reset_tare") {
+    if (!(input >> extra)) result = action == "tare" ? engine.tare() : engine.resetTare();
   } else if (action == "unit" || action == "calibrate") {
     double value;
     if ((input >> value) && !(input >> extra)) result = action == "unit" ? engine.setUnit(value) : engine.calibrate(value);
@@ -215,8 +274,12 @@ inline std::string command(StockEngine& engine, const std::string& line) {
     int value;
     if ((input >> value) && !(input >> extra)) result = action == "minimum" ? engine.setMinimum(value) : engine.unitFromSample(value);
   }
-  return std::string("{\"type\":\"ack\",\"command_id\":\"") + id + "\",\"ok\":" +
-      (result.ok ? "true" : "false") + ",\"message\":\"" + result.message + "\"}";
+  std::ostringstream out;
+  out << std::fixed << std::setprecision(10)
+      << "{\"type\":\"ack\",\"command_id\":\"" << id << "\",\"ok\":"
+      << (result.ok ? "true" : "false") << ",\"message\":\"" << result.message
+      << "\",\"unit_g\":" << engine.settings().unit_g << ",\"minimum\":" << engine.settings().minimum << "}";
+  return out.str();
 }
 
 class CommandProcessor {

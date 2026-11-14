@@ -116,8 +116,52 @@ class EngineTests(unittest.TestCase):
 
     def test_invalid_parameters_and_unstable_tare_are_rejected(self):
         self.assertFalse(self.exchange("tare early")["ok"])
-        for line in ("unit a 0", "unit b -1", "unit c nan", "minimum d -1", "minimum e 2.5", "calibrate f 0", 'tare invalid"id'):
+        for line in ("unit a 0", "unit b -1", "unit c nan", "minimum d -1", "minimum e 2.5", "calibrate f 0", 'tare invalid"id', "reset_tare extra-value 200"):
             self.assertFalse(self.exchange(line)["ok"], line)
+
+    def test_reset_tare_recovers_from_excessive_tare_and_allows_retaring(self):
+        self.settle(2000)
+        self.assertTrue(self.exchange("tare mistaken-tare")["ok"])
+        self.settle(2000)
+        for _ in range(12):
+            state = self.sample(200)
+        self.assertEqual(state["status"], "container_removed")
+        self.assertFalse(self.exchange("tare blocked-tare")["ok"])
+        self.assertTrue(self.exchange("reset_tare recover-tare")["ok"])
+        state = self.exchange("snapshot")
+        self.assertEqual(state["tare_g"], 0)
+        self.assertFalse(state["settings"]["tare_set"])
+        self.assertIsNone(state["quantity"])
+        state = self.settle(200)
+        self.assertEqual(state["quantity"], 40)
+        self.assertEqual(state["event"]["kind"], "adjustment")
+        self.assertEqual(state["event"]["delta"], 0)
+        self.assertTrue(self.exchange("tare corrected-tare")["ok"])
+        self.assertEqual(self.settle(200)["quantity"], 0)
+        self.assertAlmostEqual(self.exchange("snapshot")["tare_g"], 200, delta=1)
+
+    def test_reset_tare_preserves_calibration_and_duplicate_does_not_undo_new_tare(self):
+        self.normal()
+        self.settle(600)
+        self.assertTrue(self.exchange("calibrate calibration-1 500")["ok"])
+        before = self.settle(600)["settings"]
+        first = self.exchange("reset_tare reset-once")
+        self.assertTrue(first["ok"])
+        after = self.settle(200)["settings"]
+        for key in ("grams_per_raw", "calibrated", "unit_g", "minimum"):
+            self.assertEqual(after[key], before[key])
+        self.assertTrue(self.exchange("tare new-tare")["ok"])
+        self.settle(200)
+        self.assertEqual(self.exchange("reset_tare reset-once"), first)
+        self.assertTrue(self.exchange("snapshot")["settings"]["tare_set"])
+
+    def test_reset_when_tare_already_clear_preserves_stable_stock(self):
+        before = self.settle(200)
+        self.assertTrue(self.exchange("reset_tare already-clear")["ok"])
+        after = self.exchange("snapshot")
+        self.assertTrue(after["stable"])
+        self.assertEqual(after["quantity"], before["quantity"])
+        self.assertEqual(after["event"], before["event"])
 
     def test_reference_calibration_and_unit_from_sample(self):
         self.settle(100)
@@ -150,6 +194,53 @@ class EngineTests(unittest.TestCase):
         factor = self.exchange("snapshot")["settings"]["grams_per_raw"]
         self.assertGreater(factor, 0)
         self.assertLess(factor, 0.00001)
+
+    def test_explicit_preparation_previews_without_stock_events_or_led(self):
+        self.assertTrue(self.exchange("prepare sample-run")["ok"])
+        self.settle(100)
+        self.exchange("tare empty-run")
+        self.settle(150)
+        acknowledgement = self.exchange("sample_unit learn-ten 10")
+        self.assertTrue(acknowledgement["ok"])
+        self.assertAlmostEqual(acknowledgement["unit_g"], 5, delta=0.02)
+        for mass in (100, 150, 500):
+            state = self.settle(mass)
+            self.assertFalse(state["monitoring"])
+            self.assertFalse(state["alert"])
+            self.assertIsNone(state["event"])
+        self.assertEqual(state["quantity"], 80)
+        self.assertTrue(self.exchange("start_monitoring counted-lot")["ok"])
+        state = self.exchange("snapshot")
+        self.assertTrue(state["monitoring"])
+        self.assertEqual(state["measurement_id"], "counted-lot")
+        self.assertEqual(state["event"]["kind"], "initial")
+        self.assertEqual(state["event"]["quantity"], 80)
+        self.assertEqual(self.settle(450)["event"]["delta"], -10)
+
+    def test_start_monitoring_requires_a_tared_and_stable_container(self):
+        self.exchange("prepare no-tare")
+        self.assertFalse(self.exchange("start_monitoring no-reading")["ok"])
+        self.settle(100)
+        self.assertFalse(self.exchange("start_monitoring needs-tare")["ok"])
+        self.exchange("tare tare-container")
+        self.assertFalse(self.exchange("start_monitoring settling")["ok"])
+        self.settle(500)
+        self.assertTrue(self.exchange("start_monitoring correct-start")["ok"])
+        self.assertFalse(self.exchange("start_monitoring already-active")["ok"])
+
+    def test_new_preparation_stops_alert_and_changes_context_without_a_withdrawal(self):
+        self.exchange("prepare first-preparation")
+        self.settle(100)
+        self.exchange("tare first-container")
+        self.settle(150)
+        self.exchange("start_monitoring first-lot")
+        self.assertTrue(self.exchange("snapshot")["alert"])
+        self.exchange("prepare another-material")
+        state = self.settle(0)
+        self.assertEqual(state["measurement_id"], "another-material")
+        self.assertFalse(state["settings"]["tare_set"])
+        self.assertFalse(state["alert"])
+        self.assertIsNone(state["event"])
 
 
 if __name__ == "__main__":

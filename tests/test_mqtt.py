@@ -105,9 +105,28 @@ class MqttTests(unittest.TestCase):
     def deliver(self, kind, payload, **kwargs):
         self.client.deliver(self.config.topic + "/" + kind, payload, **kwargs)
 
-    def live(self, mass=100):
+    def raw_live(self, mass=100):
         message = self.device.settle(mass)
         self.deliver("telemetry", message)
+        return message
+
+    def live(self, mass=100):
+        message = self.raw_live(mass)
+        if self.application.materials.current["context_id"] is None:
+            # Existing transport tests begin with an explicitly configured and
+            # started monitor. Workflow tests use raw_live to test preparation.
+            hook = self.client.publish_hook
+            self.client.publish_hook = self.device_receives
+            self.application.prepare_material({})
+            self.raw_live(0)
+            self.application.execute({"command": "tare"})
+            self.application.execute({"command": "unit", "value": 5})
+            self.raw_live(mass)
+            self.application.execute({"command": "start_monitoring"})
+            message = self.device.exchange("snapshot")
+            self.deliver("telemetry", message)
+            self.client.publish_hook = hook
+            self.client.published.clear()
         return message
 
     def device_receives(self, topic, frame):
@@ -133,12 +152,15 @@ class MqttTests(unittest.TestCase):
     def test_real_engine_receives_tare_and_minimum_and_confirms_execution(self):
         self.live()
         self.client.publish_hook = self.device_receives
+        self.application.prepare_material({})
+        self.live()
         result = self.application.execute({"command": "tare", "command_id": "tare-remote"})
         self.assertTrue(result["ok"])
         self.assertEqual(result["target"], "wokwi")
         self.assertEqual(result["status"], "confirmed")
         state = self.live(1100)
         self.assertEqual(state["quantity"], 200)
+        self.application.execute({"command": "start_monitoring"})
         result = self.application.execute({"command": "minimum", "command_id": "minimum-remote", "value": 200})
         self.assertTrue(result["ok"])
         self.assertTrue(self.application.state()["telemetry"]["alert"])
@@ -163,9 +185,28 @@ class MqttTests(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertTrue(results[0]["ok"])
 
+    def test_reset_tare_recovers_live_device_and_requires_its_ack(self):
+        self.live(2000)
+        self.client.publish_hook = self.device_receives
+        self.application.prepare_material({})
+        self.live(2000)
+        self.assertTrue(self.application.execute({"command": "tare", "command_id": "wrong-tare"})["ok"])
+        self.live(2000)
+        self.assertEqual(self.live(200)["status"], "container_removed")
+        response = self.application.execute({"command": "reset_tare", "command_id": "reset-remote"})
+        self.assertEqual(response["status"], "confirmed")
+        self.assertTrue(response["ok"])
+        self.assertEqual(self.client.published[-1][1], self.device.session + "\treset_tare reset-remote")
+        state = self.live(200)
+        self.assertEqual(state["tare_g"], 0)
+        self.assertFalse(state["settings"]["tare_set"])
+        self.assertIsNone(state["event"])
+        self.assertTrue(self.application.execute({"command": "tare", "command_id": "correct-tare"})["ok"])
+        self.assertEqual(self.live(200)["quantity"], 0)
+
     def test_timeout_does_not_report_success_or_replay_command(self):
         self.live()
-        body = {"command": "tare", "command_id": "uncertain-command"}
+        body = {"command": "minimum", "value": 200, "command_id": "uncertain-command"}
         result = self.application.execute(body)
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "timeout")
@@ -186,6 +227,8 @@ class MqttTests(unittest.TestCase):
     def test_duplicate_command_and_rejected_parameter_preserve_state(self):
         self.live()
         self.client.publish_hook = self.device_receives
+        self.application.prepare_material({})
+        self.client.published.clear()
         body = {"command": "unit", "value": 10, "command_id": "idempotent"}
         result = self.application.execute(body)
         self.assertEqual(self.application.execute(body), result)
@@ -198,11 +241,14 @@ class MqttTests(unittest.TestCase):
     def test_publish_error_is_reported_without_retry(self):
         self.live()
         self.client.publish_result = 4
-        result = self.application.execute({"command": "tare", "command_id": "no-publish"})
+        result = self.application.execute({"command": "minimum", "value": 200, "command_id": "no-publish"})
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "publish_failed")
 
     def test_retained_and_out_of_order_telemetry_cannot_become_live(self):
+        self.live()
+        self.client.disconnect()
+        self.client.loop_start()
         message = self.device.settle(100)
         self.deliver("telemetry", message, retain=True)
         self.assertFalse(self.application.state()["connected"])
@@ -216,12 +262,13 @@ class MqttTests(unittest.TestCase):
 
     def test_duplicate_events_and_history_gaps(self):
         message = self.live()
+        initial_sequence = message["event"]["sequence"]
         repeated = self.device.exchange("snapshot")
         self.deliver("telemetry", repeated)
         self.assertEqual(len(self.application.state()["events"]), 1)
         self.device.settle(1100)  # An event that was not received by the backend.
         message = self.live(950)
-        self.assertEqual(message["event"]["sequence"], 3)
+        self.assertEqual(message["event"]["sequence"], initial_sequence + 2)
         state = self.application.state()
         self.assertEqual(len(state["events"]), 2)
         self.assertIsNotNone(state["history_warning"])
@@ -285,6 +332,11 @@ class MqttTests(unittest.TestCase):
         local = Application(self.database, background=False)
         for i in range(12):
             local.tick(milliseconds=(i + 1) * 100)
+        local.execute({"command": "tare"})
+        local.execute({"command": "unit", "value": 5})
+        for i in range(12):
+            local.tick(milliseconds=(i + 13) * 100)
+        local.execute({"command": "start_monitoring"})
         self.assertEqual(len(local.state()["events"]), 1)
         local.close()
         self.application = Application(self.database, mode="mqtt", mqtt_config=self.config,
@@ -292,6 +344,118 @@ class MqttTests(unittest.TestCase):
         self.assertEqual(self.application.state()["events"], [])
         self.live()
         self.assertEqual(len(self.application.state()["events"]), 1)
+
+    def test_sample_and_lot_over_mqtt_remain_preparation_until_start_is_confirmed(self):
+        self.raw_live(100)
+        self.client.publish_hook = self.device_receives
+        nail = self.application.create_material({"name": "Prego"})["material"]
+        self.application.prepare_material({"material_id": nail["id"]})
+        self.raw_live(100)
+        self.application.execute({"command": "tare"})
+        self.raw_live(150)
+        self.application.execute({"command": "sample_unit", "value": 10})
+        state = self.raw_live(500)
+        self.assertEqual(state["quantity"], 80)
+        self.assertFalse(state["alert"])
+        self.assertEqual(self.application.state()["events"], [])
+        self.assertAlmostEqual(self.application.state()["workflow"]["material"]["unit_g"], 5, delta=0.02)
+        self.client.publish_hook = None
+        response = self.application.execute({"command": "start_monitoring", "command_id": "unconfirmed-start"})
+        self.assertEqual(response["status"], "timeout")
+        self.assertEqual(self.application.state()["events"], [])
+        # The device later receives exactly that command. Its live telemetry
+        # establishes the real state even though the HTTP result was uncertain.
+        topic, frame, _ = self.client.published[-1]
+        self.device_receives(topic, frame)
+        state = self.application.state()
+        self.assertEqual(state["workflow"]["phase"], "monitoring")
+        self.assertEqual([(e["kind"], e["quantity"]) for e in state["events"]], [("initial", 80)])
+
+    def test_delayed_previous_material_telemetry_does_not_enter_new_material_history(self):
+        old = self.live(500)
+        old_material = self.application.state()["workflow"]["material"]["id"]
+        self.client.publish_hook = self.device_receives
+        nail = self.application.create_material({"name": "Prego"})["material"]
+        self.application.prepare_material({"material_id": nail["id"]})
+        current = self.application.state()["telemetry"]
+        self.deliver("telemetry", old)
+        self.assertEqual(self.application.state()["events"], [])
+        self.assertEqual(self.application.state()["telemetry"], current)
+        self.assertEqual(len(self.application.state(history_material=old_material)["events"]), 1)
+
+    def test_saved_profile_does_not_take_unit_from_an_unconfirmed_or_late_ack(self):
+        self.raw_live(100)
+        self.client.publish_hook = self.device_receives
+        self.application.prepare_material({})
+        first_material = self.application.state()["workflow"]["material"]["id"]
+        self.client.publish_hook = None
+        response = self.application.execute({"command": "unit", "value": 9, "command_id": "late-unit"})
+        self.assertEqual(response["status"], "timeout")
+        late_frame = self.client.published[-1]
+        self.client.publish_hook = self.device_receives
+        nail = self.application.create_material({"name": "Prego"})["material"]
+        self.application.prepare_material({"material_id": nail["id"]})
+        topic, frame, _ = late_frame
+        self.device_receives(topic, frame)
+        self.assertIsNone(self.application.materials.get(first_material)["unit_g"])
+        self.assertIsNone(self.application.materials.get(nail["id"])["unit_g"])
+        self.assertFalse(self.application.state()["workflow"]["unit_ready"])
+
+    def test_backend_restart_resumes_known_mqtt_run_without_reconfiguration_or_false_gap(self):
+        self.live(500)
+        previous = self.live(400)
+        context = self.application.state()["workflow"]["context_id"]
+        self.application.close()
+        self.client = MemoryClient()
+        self.application = Application(self.database, mode="mqtt", mqtt_config=self.config,
+                                       transport_factory=self.factory, command_timeout=0.04)
+        self.raw_live(400)
+        state = self.application.state()
+        self.assertEqual(state["workflow"]["context_id"], context)
+        self.assertEqual(state["workflow"]["phase"], "monitoring")
+        self.assertEqual(state["telemetry"]["quantity"], previous["quantity"])
+        self.assertIsNone(state["history_warning"])
+        self.assertEqual(self.client.published, [])
+
+    def test_old_firmware_is_reported_without_saving_unowned_stock_events(self):
+        old = self.device.settle(100)
+        old.pop("monitoring")
+        old.pop("measurement_id")
+        self.deliver("telemetry", old)
+        state = self.application.state()
+        self.assertTrue(state["connected"])
+        self.assertFalse(state["workflow"]["supported"])
+        self.assertIn("Atualize", state["workflow"]["message"])
+        self.assertEqual(state["events"], [])
+        with self.assertRaisesRegex(ValueError, "Atualize"):
+            self.application.prepare_material({})
+
+    def test_delayed_start_cannot_start_another_material_after_switching(self):
+        self.raw_live(100)
+        self.client.publish_hook = self.device_receives
+        self.application.prepare_material({})
+        self.raw_live(100)
+        self.application.execute({"command": "tare"})
+        self.application.execute({"command": "unit", "value": 5})
+        self.raw_live(500)
+        self.client.publish_hook = None
+        response = self.application.execute({"command": "start_monitoring", "command_id": "delayed-old-start"})
+        self.assertEqual(response["status"], "timeout")
+        old_start = self.client.published[-1]
+        self.client.publish_hook = self.device_receives
+        nail = self.application.create_material({"name": "Prego"})["material"]
+        self.application.prepare_material({"material_id": nail["id"]})
+        self.raw_live(100)
+        self.application.execute({"command": "tare"})
+        self.application.execute({"command": "unit", "value": 10})
+        self.raw_live(900)
+        topic, frame, _ = old_start
+        self.device_receives(topic, frame)
+        state = self.application.state()
+        self.assertEqual(state["workflow"]["phase"], "preparing")
+        self.assertEqual(state["workflow"]["material"]["id"], nail["id"])
+        self.assertEqual(state["events"], [])
+        self.assertFalse(state["telemetry"]["monitoring"])
 
 
 class ConfigTests(unittest.TestCase):
