@@ -435,7 +435,7 @@ class Application:
             command_id = body.get("command_id", uuid.uuid4().hex)
             if not isinstance(command_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", command_id):
                 raise ValueError("Identificador de comando inválido.")
-            if action not in ("prepare", "start_monitoring", "tare", "reset_tare", "unit", "minimum", "calibrate", "sample_unit"):
+            if action not in ("prepare", "start_monitoring", "tare", "reset_tare", "reset_calibration", "unit", "minimum", "calibrate", "sample_unit"):
                 raise ValueError("Comando desconhecido.")
             value = body.get("value")
             if action in ("unit", "calibrate"):
@@ -450,7 +450,7 @@ class Application:
                 return json.loads(previous["acknowledgement"])
             if not self.simulation["connected"] or self.error:
                 raise ValueError("O simulador está desconectado. Reconecte antes de enviar comandos.")
-            line = f"{action} {command_id}" + ("" if action in ("prepare", "tare", "reset_tare") else f" {value}")
+            line = f"{action} {command_id}" + ("" if action in ("prepare", "tare", "reset_tare", "reset_calibration") else f" {value}")
             acknowledgement = self._exchange(line)
             acknowledgement["target"] = "local_simulator"
             self.db.execute("INSERT INTO commands VALUES (?, ?, ?, ?)",
@@ -463,7 +463,7 @@ class Application:
         command_id = body.get("command_id", uuid.uuid4().hex)
         if not isinstance(command_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", command_id):
             raise ValueError("Identificador de comando inválido.")
-        if action not in ("prepare", "start_monitoring", "tare", "reset_tare", "unit", "minimum", "calibrate", "sample_unit"):
+        if action not in ("prepare", "start_monitoring", "tare", "reset_tare", "reset_calibration", "unit", "minimum", "calibrate", "sample_unit"):
             raise ValueError("Comando desconhecido.")
         value = body.get("value")
         if action in ("unit", "calibrate"):
@@ -492,7 +492,7 @@ class Application:
                 line = f"{action} {command_id}"
                 if action == "start_monitoring":
                     line += " " + value
-                elif action not in ("prepare", "tare", "reset_tare"):
+                elif action not in ("prepare", "tare", "reset_tare", "reset_calibration"):
                     line += " " + format(value, ".12g")
                 try:
                     self.transport.publish_command(self.session, line)

@@ -8,10 +8,11 @@
 
 namespace stockweight {
 
-// The potentiometer represents 0–5000 g with a 12-bit ESP32 ADC.
+// O potenciômetro representa de 0 a 5.000 g usando o ADC de 12 bits do ESP32.
 constexpr double kNominalGramsPerRaw = 5000.0 / 4095.0;
 constexpr unsigned kWindowSize = 10;
 
+// Parâmetros configuráveis da medição e do estoque.
 struct Settings {
   double unit_g = 5.0;
   int minimum = 50;
@@ -21,6 +22,7 @@ struct Settings {
   bool calibrated = false;
 };
 
+// Resultado padronizado dos comandos enviados pelo dashboard.
 struct Result {
   bool ok;
   const char* message;
@@ -30,6 +32,7 @@ class StockEngine {
  public:
   const Settings& settings() const { return settings_; }
 
+  // Restaura uma configuração persistida depois de validar seus limites.
   Result restore(const Settings& value) {
     if (!validUnit(value.unit_g) || value.minimum < 0 || value.minimum > 1000000 ||
         !std::isfinite(value.grams_per_raw) || value.grams_per_raw <= 0 ||
@@ -42,6 +45,7 @@ class StockEngine {
     return {true, "Configuração restaurada."};
   }
 
+  // Recebe uma amostra do sensor e atualiza estabilidade, massa e quantidade.
   void sample(double raw, bool valid, uint32_t now_ms) {
     if (static_cast<uint32_t>(now_ms - now_ms_) > 500) clearWindow();
     now_ms_ = now_ms;
@@ -53,6 +57,7 @@ class StockEngine {
     samples_[cursor_] = raw;
     cursor_ = (cursor_ + 1) % kWindowSize;
     if (count_ < kWindowSize) ++count_;
+    // Calcula a média e a amplitude da janela para rejeitar oscilações.
     double total = 0, low = samples_[0], high = samples_[0];
     for (unsigned i = 0; i < count_; ++i) {
       total += samples_[i];
@@ -95,6 +100,7 @@ class StockEngine {
     }
   }
 
+  // Registra o peso atual do recipiente como zero da medição líquida.
   Result tare() {
     if (!valid_ || !stable_) return {false, "Aguarde uma leitura estável antes de tarar."};
     settings_.tare_raw = last_stable_raw_;
@@ -103,6 +109,7 @@ class StockEngine {
     return {true, "Tara aplicada. Aguarde a estabilização."};
   }
 
+  // Inicia uma nova medição sem registrar movimentações no histórico.
   Result prepare(const std::string& measurement_id) {
     workflow_ = true;
     monitoring_ = false;
@@ -114,6 +121,7 @@ class StockEngine {
     return {true, "Preparação iniciada. Tare o recipiente vazio e defina a massa por peça."};
   }
 
+  // Confirma o lote estável e começa a registrar retiradas e reposições.
   Result startMonitoring(const std::string& measurement_id, const std::string& expected_preparation = "") {
     if (!expected_preparation.empty() && expected_preparation != measurement_id_)
       return {false, "A preparação mudou. Confira o material e inicie novamente pelo painel."};
@@ -138,6 +146,7 @@ class StockEngine {
     return {true, "Tara resetada. Aguarde estabilizar e tare o recipiente vazio."};
   }
 
+  // Calcula gramas por unidade bruta usando uma massa de referência conhecida.
   Result calibrate(double reference_g) {
     if (!std::isfinite(reference_g) || reference_g <= 0 || reference_g > 5000)
       return {false, "Informe uma massa de referência maior que zero e até 5000 g."};
@@ -154,6 +163,16 @@ class StockEngine {
     return {true, "Calibração aplicada à escala simulada."};
   }
 
+  // Remove a calibração e retorna à conversão nominal do ADC.
+  Result resetCalibration() {
+    if (!settings_.calibrated) return {true, "A calibração já está resetada."};
+    settings_.grams_per_raw = kNominalGramsPerRaw;
+    settings_.calibrated = false;
+    resetBaseline();
+    return {true, "Calibração resetada. A escala voltou ao fator nominal."};
+  }
+
+  // Define manualmente o peso médio de uma peça.
   Result setUnit(double grams) {
     if (!validUnit(grams)) return {false, "A massa unitária deve estar entre 0,01 e 5000 g."};
     if (settings_.unit_g != grams) {
@@ -163,6 +182,7 @@ class StockEngine {
     return {true, "Massa unitária atualizada."};
   }
 
+  // Aprende o peso unitário dividindo a massa líquida pela amostra informada.
   Result unitFromSample(int pieces) {
     if (pieces <= 0 || pieces > 1000000) return {false, "Informe uma quantidade inteira positiva."};
     if (!settings_.tare_set || !valid_ || !stable_ || netGrams() <= 0)
@@ -170,16 +190,19 @@ class StockEngine {
     return setUnit(netGrams() / pieces);
   }
 
+  // Atualiza o limite que aciona o alerta de estoque baixo.
   Result setMinimum(int minimum) {
     if (minimum < 0 || minimum > 1000000) return {false, "O estoque mínimo deve ser um inteiro de 0 a 1000000."};
     settings_.minimum = minimum;
     return {true, "Estoque mínimo atualizado."};
   }
 
+  // Indica se a quantidade monitorada atingiu o estoque mínimo.
   bool alert() const {
     return monitoring_ && valid_ && container_present_ && has_quantity_ && quantity_ <= settings_.minimum;
   }
 
+  // Serializa a leitura e as configurações em JSON para o dashboard.
   std::string telemetry(const std::string& device, const std::string& session, uint32_t sequence) const {
     std::ostringstream out;
     out << std::fixed << std::setprecision(5)
@@ -209,36 +232,44 @@ class StockEngine {
   }
 
  private:
+  // Configuração atual aplicada às leituras.
   Settings settings_;
   // Standalone core clients retain the original behavior; the application and
   // ESP32 explicitly enter preparation on boot before accepting stock changes.
-  bool monitoring_ = true;
-  bool workflow_ = false;
-  std::string measurement_id_ = "legacy";
-  double samples_[kWindowSize] = {};
-  unsigned count_ = 0, cursor_ = 0;
-  double raw_ = 0, last_stable_raw_ = 0, accepted_net_g_ = 0;
-  bool valid_ = false, stable_ = false, container_present_ = true;
-  bool has_baseline_ = false, ever_baseline_ = false, has_quantity_ = false;
-  int quantity_ = 0;
-  uint32_t now_ms_ = 0, event_seq_ = 0;
-  const char* event_kind_ = "initial";
-  int event_delta_ = 0, event_quantity_ = 0;
+  bool monitoring_ = true;                 // Permite registrar eventos de estoque.
+  bool workflow_ = false;                  // Indica o fluxo moderno de preparação.
+  std::string measurement_id_ = "legacy";  // Identifica a medição atual.
+  double samples_[kWindowSize] = {};        // Janela usada para verificar estabilidade.
+  unsigned count_ = 0, cursor_ = 0;         // Quantidade e posição da próxima amostra.
+  double raw_ = 0, last_stable_raw_ = 0, accepted_net_g_ = 0; // Leituras de referência.
+  bool valid_ = false, stable_ = false, container_present_ = true; // Estado da leitura.
+  bool has_baseline_ = false, ever_baseline_ = false, has_quantity_ = false; // Linha de base.
+  int quantity_ = 0;                        // Quantidade estimada atualmente.
+  uint32_t now_ms_ = 0, event_seq_ = 0;     // Relógio e sequência dos eventos.
+  const char* event_kind_ = "initial";      // Tipo do último evento confirmado.
+  int event_delta_ = 0, event_quantity_ = 0; // Dados do último evento.
 
+  // Confere se o peso de uma peça está dentro da faixa permitida.
   static bool validUnit(double value) { return std::isfinite(value) && value >= 0.01 && value <= 5000; }
+  // Converte bool de C++ para o literal JSON correspondente.
   static const char* boolean(bool value) { return value ? "true" : "false"; }
+  // Formata números para evitar notação científica na telemetria.
   static std::string number(double value) {
     std::ostringstream out;
     out << std::fixed << std::setprecision(5) << value;
     return out.str();
   }
+  // Converte a leitura bruta em massa líquida, descontando a tara.
   double netGrams() const { return (raw_ - settings_.tare_raw) * settings_.grams_per_raw; }
+  // Limpa a janela de amostras para exigir nova estabilização.
   void clearWindow() { count_ = cursor_ = 0; stable_ = false; }
+  // Descarta a linha de base para que uma alteração de configuração não vire evento.
   void resetBaseline() {
     if (workflow_) monitoring_ = false;
     has_baseline_ = has_quantity_ = false;
     clearWindow();
   }
+  // Armazena o último evento confirmado para ser enviado na telemetria.
   void addEvent(const char* kind, int delta, int quantity) {
     ++event_seq_;
     event_kind_ = kind;
@@ -249,7 +280,7 @@ class StockEngine {
 
 // Shared command protocol for Serial and MQTT.
 // Commands: prepare ID | start_monitoring ID [PREPARATION] | tare ID | reset_tare ID
-//           calibrate ID GRAMS | unit ID GRAMS | minimum ID INTEGER
+//           calibrate ID GRAMS | reset_calibration ID | unit ID GRAMS | minimum ID INTEGER
 //           sample_unit ID INTEGER
 inline std::string command(StockEngine& engine, const std::string& line) {
   std::istringstream input(line);
@@ -265,8 +296,12 @@ inline std::string command(StockEngine& engine, const std::string& line) {
     std::string expected;
     if (!(input >> expected)) result = engine.startMonitoring(id);
     else if (!(input >> extra)) result = engine.startMonitoring(id, expected);
-  } else if (action == "tare" || action == "reset_tare") {
-    if (!(input >> extra)) result = action == "tare" ? engine.tare() : engine.resetTare();
+  } else if (action == "tare" || action == "reset_tare" || action == "reset_calibration") {
+    if (!(input >> extra)) {
+      if (action == "tare") result = engine.tare();
+      else if (action == "reset_tare") result = engine.resetTare();
+      else result = engine.resetCalibration();
+    }
   } else if (action == "unit" || action == "calibrate") {
     double value;
     if ((input >> value) && !(input >> extra)) result = action == "unit" ? engine.setUnit(value) : engine.calibrate(value);

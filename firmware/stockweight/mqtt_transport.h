@@ -10,10 +10,11 @@
 #include <cstring>
 #include <string>
 
-// This task is the sole owner of WiFi/PubSubClient. It never accesses StockEngine:
-// inbound commands and outbound snapshots cross bounded FreeRTOS queues instead.
+// Esta tarefa é a única dona do Wi-Fi e do PubSubClient.
+// Ela não acessa o StockEngine: comandos e telemetrias atravessam filas FreeRTOS.
 class StockMqttTransport {
  public:
+  // Cria as filas e inicia a tarefa independente de comunicação MQTT.
   bool begin(const std::string& session) {
     session_ = session;
     root_ = std::string(SW_MQTT_PREFIX) + "/" + SW_DEVICE_ID;
@@ -35,6 +36,7 @@ class StockMqttTransport {
     return true;
   }
 
+  // Guarda somente a telemetria mais recente, evitando acumular leituras antigas.
   void publishTelemetry(const std::string& json) {
     if (!telemetry_ || json.size() >= sizeof(Telemetry::text)) return;
     Telemetry packet{};
@@ -43,6 +45,7 @@ class StockMqttTransport {
     xQueueOverwrite(telemetry_, &packet);
   }
 
+  // Enfileira a confirmação de um comando para publicação no broker.
   void publishAck(const std::string& json) {
     if (!acks_ || json.size() >= sizeof(Acknowledgement::text)) return;
     Acknowledgement packet{};
@@ -50,6 +53,7 @@ class StockMqttTransport {
     if (xQueueSend(acks_, &packet, 0) != pdTRUE) log("Fila de confirmações MQTT cheia.");
   }
 
+  // Retira da fila o próximo comando recebido do dashboard.
   bool nextCommand(std::string& line) {
     if (!commands_) return false;
     Command packet{};
@@ -67,15 +71,18 @@ class StockMqttTransport {
   QueueHandle_t telemetry_ = nullptr, acks_ = nullptr, commands_ = nullptr;
   std::string session_, root_, telemetryTopic_, commandTopic_, ackTopic_, availabilityTopic_;
 
+  // Registra eventos de rede em JSON para facilitar o diagnóstico no serial.
   static void log(const char* message) {
     Serial.printf("{\"type\":\"network\",\"message\":\"%s\"}\n", message);
   }
 
+  // Monta a mensagem de disponibilidade retida pelo broker MQTT.
   std::string availability(bool online) const {
     return std::string("{\"device_id\":\"") + SW_DEVICE_ID + "\",\"session_id\":\"" + session_ +
            "\",\"online\":" + (online ? "true" : "false") + "}";
   }
 
+  // Valida a sessão e encaminha comandos recebidos para a fila interna.
   void receive(char* topic, uint8_t* payload, unsigned int length) {
     if (commandTopic_ != topic || length > 270) return;
     const std::string frame(reinterpret_cast<char*>(payload), length);
@@ -96,6 +103,7 @@ class StockMqttTransport {
     static_cast<StockMqttTransport*>(context)->run();
   }
 
+  // Mantém Wi-Fi/MQTT conectados, processa filas e tenta reconectar automaticamente.
   void run() {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
     socket_.setConnectionTimeout(1000);
@@ -113,6 +121,7 @@ class StockMqttTransport {
     client_.setCallback([this](char* topic, uint8_t* payload, unsigned int length) { receive(topic, payload, length); });
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
+    // Rede pública simulada do Wokwi; no hardware real serão usadas credenciais reais.
     WiFi.begin("Wokwi-GUEST", "", 6);
     log("Conectando ao Wi-Fi Wokwi-GUEST.");
     uint32_t lastAttempt = millis() - 5000;
@@ -120,6 +129,7 @@ class StockMqttTransport {
     const std::string offline = availability(false);
     for (;;) {
       const uint32_t now = millis();
+      // Primeiro garante o Wi-Fi; depois conecta e assina o tópico de comandos.
       if (WiFi.status() == WL_CONNECTED) {
         if (!client_.connected() && now - lastAttempt >= 5000) {
           lastAttempt = now;
@@ -135,6 +145,7 @@ class StockMqttTransport {
             Serial.printf("{\"type\":\"network\",\"message\":\"Falha ao conectar ao broker; nova tentativa em 5 s.\",\"code\":%d}\n", client_.state());
           }
         }
+        // Mantém a sessão MQTT viva e esvazia as filas de saída.
         if (client_.connected()) {
           client_.loop();
           Acknowledgement ack{};

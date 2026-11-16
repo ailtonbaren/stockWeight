@@ -38,6 +38,7 @@ function controls() {
   const preparing = current?.workflow?.phase === "preparing";
   $("tare-button").disabled = !stable || !preparing;
   $("reset-tare-button").disabled = !online || !current?.telemetry?.settings?.tare_set;
+  $("reset-calibration-button").disabled = !online || !preparing || !current?.telemetry?.settings?.calibrated;
   $("prepare-button").disabled = !current?.connected || busy || !current?.workflow?.supported;
   $("start-button").disabled = busy || !current?.workflow?.can_start || !choiceMatches;
   $("material-select").disabled = busy;
@@ -367,6 +368,7 @@ $("fault").addEventListener("change", (event) => simulation({fault: event.target
 $("pause").addEventListener("click", () => current && simulation({connected: !current.simulation.connected}));
 $("tare-button").addEventListener("click", () => sendCommand("tare"));
 $("reset-tare-button").addEventListener("click", () => sendCommand("reset_tare"));
+$("reset-calibration-button").addEventListener("click", () => sendCommand("reset_calibration"));
 $("material-select").addEventListener("change", (event) => {
   chosenMaterial = event.target.value;
   if (current) renderMaterials(current.materials, current.workflow);
