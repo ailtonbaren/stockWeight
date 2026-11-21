@@ -53,6 +53,13 @@ main { max-width: 1160px; min-height: 100vh; margin: 0 auto; padding-bottom: 20p
 .header-meta small { color: var(--bar-muted); font-size: 11px; white-space: nowrap; }
 .header-meta small span { margin-left: 5px; font-variant-numeric: tabular-nums; }
 .header-controls { display: flex; align-items: center; gap: 20px; }
+.admin-toggle { min-height: 30px; padding: 5px 10px; color: var(--bar-ink); background: transparent; border: 1px solid #6c7881; border-radius: 4px; font-size: 11px; }
+.admin-toggle[aria-pressed="true"] { background: #536674; border-color: #91b6d1; }
+.admin-only { display: none !important; }
+body.admin-view .admin-only { display: block !important; }
+body.admin-view .simulation-card.admin-only { display: block !important; }
+body.admin-view .history-card.admin-only { display: block !important; }
+body.admin-view .autonomy-example.admin-only { display: block !important; }
 .pill { font-size: 12px; font-weight: 400; }
 .pill.normal { color: var(--positive); }
 .pill.alert { color: var(--negative); font-weight: 700; }
@@ -111,6 +118,48 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 #autonomy-detail { margin-top: 13px; }
 .period-note { margin-top: 10px; font-size: 11px; color: var(--muted); }
 .work-grid { display: grid; grid-template-columns: 1fr 1fr; margin: 16px 20px 0; border: 1px solid var(--line); }
+body:not(.admin-view) .work-grid { grid-template-columns: 1fr; }
+/* A visão do funcionário privilegia leitura rápida e controles maiores. */
+body:not(.admin-view) .page-header { padding-top: 26px; padding-bottom: 22px; }
+body:not(.admin-view) .page-header h1 { font-size: 28px; }
+body:not(.admin-view) .metrics { margin-top: 24px; }
+body:not(.admin-view) .reading-heading,
+body:not(.admin-view) .autonomy-panel { padding: 18px 22px; }
+body:not(.admin-view) .reading-heading h2,
+body:not(.admin-view) .autonomy-panel h2,
+body:not(.admin-view) .settings-card h2 { font-size: 18px; }
+body:not(.admin-view) .scale-values { gap: 32px; padding: 28px 26px 20px; }
+body:not(.admin-view) .reading-label { font-size: 15px; }
+body:not(.admin-view) .stock-value > strong,
+body:not(.admin-view) .weight-value > strong { font-size: clamp(38px, 6vw, 60px); }
+body:not(.admin-view) .stock-value,
+body:not(.admin-view) .weight-value { gap: 10px; margin-top: 10px; }
+body:not(.admin-view) .stock-value > span,
+body:not(.admin-view) .weight-value > span { font-size: 16px; }
+body:not(.admin-view) .weight-details { padding: 0 26px 18px; font-size: 14px; }
+body:not(.admin-view) .stock-bottom { padding: 14px 26px; font-size: 14px; }
+body:not(.admin-view) .card-footnote { padding: 0 26px 22px; font-size: 13px; }
+body:not(.admin-view) .preparation-panel,
+body:not(.admin-view) .work-grid { margin-top: 24px; }
+body:not(.admin-view) .preparation-panel .section-title,
+body:not(.admin-view) .preparation-body { padding: 18px 24px; }
+body:not(.admin-view) .preparation-body label,
+body:not(.admin-view) .settings-card label { font-size: 15px; }
+body:not(.admin-view) .preparation-body select,
+body:not(.admin-view) .settings-card input[type=number] { height: 46px; font-size: 16px; }
+body:not(.admin-view) .preparation-body .button,
+body:not(.admin-view) .settings-card .button { min-height: 46px; padding-inline: 18px; font-size: 14px; }
+body:not(.admin-view) .workflow-actions { margin-top: 22px; }
+body:not(.admin-view) #workflow-message { font-size: 15px; }
+body:not(.admin-view) .tare-row { padding: 8px 0 22px; }
+body:not(.admin-view) .tare-row strong { font-size: 17px; }
+body:not(.admin-view) .tare-row p { font-size: 13px; }
+body:not(.admin-view) .settings-fields { gap: 22px; margin: 24px 0; }
+body:not(.admin-view) .sample-section { margin-top: 20px; padding-block: 18px; }
+body:not(.admin-view) .settings-card .sample-section h3 { font-size: 17px; }
+body:not(.admin-view) .settings-card details summary { font-size: 15px; }
+body:not(.admin-view) .autonomy-panel .consumption,
+body:not(.admin-view) .autonomy-panel .autonomy-row { font-size: 15px; }
 .work-grid > section { min-width: 0; padding: 14px 16px; }
 .simulation-card { border-right: 1px solid var(--line); }
 .section-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: -14px -16px 14px; padding: 10px 14px; background: var(--heading); border-bottom: 1px solid var(--line); }
@@ -123,14 +172,14 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 .mass-form { margin-top: 14px; }
 label { display: block; margin-bottom: 6px; font-size: 12px; }
 label span { color: var(--muted); }
-input[type=number] { width: 100%; min-width: 0; height: 32px; padding: 5px 8px; background: var(--input); border: 1px solid var(--input-border); border-radius: 2px; color: var(--ink); font-variant-numeric: tabular-nums; }
-input[type=text], select { width: 100%; min-width: 0; height: 32px; padding: 5px 8px; background: var(--input); border: 1px solid var(--input-border); border-radius: 2px; color: var(--ink); }
+input[type=number] { width: 100%; min-width: 0; height: 38px; padding: 5px 10px; background: var(--input); border: 1px solid var(--input-border); border-radius: 2px; color: var(--ink); font-variant-numeric: tabular-nums; font-size: 15px; }
+input[type=text], select { width: 100%; min-width: 0; height: 38px; padding: 5px 10px; background: var(--input); border: 1px solid var(--input-border); border-radius: 2px; color: var(--ink); }
 .input-action { display: flex; gap: 6px; }
 .input-action > input, .input-unit { flex: 1; min-width: 0; }
 .input-unit { position: relative; }
 .input-unit > input { padding-right: 30px; }
 .input-unit > span { position: absolute; top: 8px; right: 10px; font-size: 12px; color: var(--muted); }
-.button { min-height: 32px; padding: 5px 12px; border: 1px solid var(--input-border); border-radius: 2px; background: var(--button); color: var(--ink); font-size: 12px; white-space: nowrap; }
+.button { min-height: 38px; padding: 6px 14px; border: 1px solid var(--input-border); border-radius: 2px; background: var(--button); color: var(--ink); font-size: 13px; white-space: nowrap; }
 .button:hover:enabled { background: var(--button-hover); border-color: var(--input-hover); }
 .button:active:enabled { background: var(--button-active); }
 .button.dark { background: var(--primary); color: var(--primary-ink); border-color: var(--primary); }
@@ -147,9 +196,15 @@ input[type=text], select { width: 100%; min-width: 0; height: 32px; padding: 5px
 .text-button { padding: 0; background: none; border: 0; color: var(--link); text-decoration: underline; font-size: 11px; }
 .tare-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--rule); }
 .tare-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.tare-row strong { font-size: 12px; font-weight: 600; }
+.tare-row strong { font-size: 14px; font-weight: 600; }
 .tare-row p { margin-top: 4px; font-size: 11px; }
-.settings-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 15px 0; }
+.settings-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 18px 0; }
+.settings-card { padding: 2px 18px 18px; }
+.settings-card .section-title { margin-inline: -18px; padding-inline: 18px; }
+.settings-card label { font-size: 13px; }
+.settings-card .sample-section h3 { font-size: 14px; }
+.settings-card .tare-actions .button { min-width: 130px; }
+.calibration-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 details { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--rule); }
 summary { display: list-item; list-style: disclosure-closed; margin-left: 14px; font-size: 12px; font-weight: 400; }
 details[open] > summary { list-style: disclosure-open; }

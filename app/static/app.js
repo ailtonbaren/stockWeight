@@ -250,6 +250,22 @@ function renderHistory(events, target = "events", example = false) {
 
 let exampleLoaded = false;
 let exampleLoading = false;
+let adminView = localStorage.getItem("stockweight-admin-view") === "true";
+
+function updateAdminView() {
+  document.body.classList.toggle("admin-view", adminView);
+  const button = $("admin-toggle");
+  button.setAttribute("aria-pressed", String(adminView));
+  button.textContent = adminView ? "Sair do administrador" : "Modo administrador";
+}
+
+$("admin-toggle").addEventListener("click", () => {
+  adminView = !adminView;
+  localStorage.setItem("stockweight-admin-view", String(adminView));
+  updateAdminView();
+});
+updateAdminView();
+
 $("autonomy-example").addEventListener("toggle", async () => {
   if (!$("autonomy-example").open || exampleLoaded || exampleLoading) return;
   exampleLoading = true;

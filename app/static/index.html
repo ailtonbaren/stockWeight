@@ -16,6 +16,7 @@
       <strong class="app-name">StockWeight</strong>
       <div class="header-controls">
         <div class="header-meta"><span id="connection" class="pill neutral">Conectando ao servidor…</span><small>Última leitura <span id="last-reading">—</span></small></div>
+        <button id="admin-toggle" type="button" class="admin-toggle" aria-pressed="false">Modo administrador</button>
         <button id="theme-toggle" type="button" class="theme-toggle" role="switch" aria-checked="true" aria-label="Modo noturno"><span class="theme-track" aria-hidden="true"></span><span id="theme-label">Noturno</span></button>
       </div>
     </div>
@@ -30,7 +31,7 @@
       <div class="section-title"><h2 id="preparation-title">Preparar contagem</h2><span id="workflow-phase" class="pill neutral">Preparação</span></div>
       <div class="preparation-body">
         <div class="material-picker"><div><label for="material-select">Material do recipiente</label><select id="material-select"><option value="">Carregando materiais…</option></select></div><button id="prepare-button" class="button outline" type="button" disabled>Preparar contagem</button></div>
-        <details class="new-material"><summary>Cadastrar material</summary><form id="material-form" class="input-action"><label class="sr-only" for="material-name">Nome do material</label><input id="material-name" name="name" type="text" maxlength="80" placeholder="Ex.: Prego ou Parafuso M4" required><button class="button outline" type="submit">Cadastrar</button></form></details>
+        <details class="new-material admin-only"><summary>Cadastrar material</summary><form id="material-form" class="input-action"><label class="sr-only" for="material-name">Nome do material</label><input id="material-name" name="name" type="text" maxlength="80" placeholder="Ex.: Prego ou Parafuso M4" required><button class="button outline" type="submit">Cadastrar</button></form></details>
         <div class="workflow-actions"><div><p id="workflow-message" role="status">Selecione o material, tare o recipiente e pese uma amostra conhecida.</p><p id="preparation-note" class="small muted">Durante a preparação, as mudanças de peso não entram no histórico. Coloque o lote completo antes de iniciar.</p></div><button id="start-button" class="button dark" type="button" disabled>Iniciar monitoramento</button></div>
       </div>
     </section>
@@ -61,7 +62,7 @@
     </section>
 
     <div class="work-grid">
-      <section class="simulation-card" aria-labelledby="simulation-title">
+      <section class="simulation-card admin-only" aria-labelledby="simulation-title">
         <div class="section-title"><div><h2 id="simulation-title">Entrada de peso</h2><p id="source-eyebrow" class="section-subtitle">Simulador local</p></div><span class="led-label"><span id="virtual-led" class="led" aria-label="LED de alerta desligado"></span>LED de alerta</span></div>
         <div id="local-controls">
           <p class="muted small source-intro">Informe o peso total, incluindo o recipiente.</p>
@@ -79,17 +80,17 @@
       </section>
       <section id="settings" class="settings-card" aria-labelledby="settings-title">
         <div class="section-title"><h2 id="settings-title">Ajustes da balança</h2></div>
-        <div class="tare-row"><div><strong>Tara do recipiente</strong><p class="small muted">Tare o recipiente vazio. Para corrigir uma tara, resete e tare novamente.</p></div><div class="tare-actions"><button id="tare-button" type="button" class="button outline" disabled>Tarar balança</button><button id="reset-tare-button" type="button" class="button outline" disabled>Resetar tara</button></div></div>
+        <div class="tare-row"><div><strong>Tara</strong><p class="small muted">Recipiente vazio</p></div><div class="tare-actions"><button id="tare-button" type="button" class="button outline" disabled>Tarar balança</button><button id="reset-tare-button" type="button" class="button outline" disabled>Resetar tara</button></div></div>
         <div class="settings-fields">
           <form id="unit-form"><label for="unit">Massa unitária <span>(g)</span></label><div class="input-action"><input id="unit" name="unit" type="number" min="0.01" max="5000" step="any" placeholder="Por amostra" required><button type="submit" class="button small-button" data-preparation-control>Salvar</button></div></form>
           <form id="minimum-form"><label for="minimum">Estoque mínimo <span>(peças)</span></label><div class="input-action"><input id="minimum" name="minimum" type="number" min="0" max="1000000" step="1" value="50" required><button type="submit" class="button small-button" data-command-control>Salvar</button></div></form>
         </div>
-        <div class="sample-section"><h3>Aprender peso por amostra</h3><p class="small muted">Tare o recipiente vazio. Depois coloque, por exemplo, 10 peças iguais, aguarde estabilizar e informe a quantidade.</p><form id="sample-form"><label for="sample-count">Quantidade de peças na amostra</label><div class="input-action"><input id="sample-count" type="number" min="1" max="1000000" step="1" value="10" required><button type="submit" class="button outline" data-stable-control>Aprender peso por peça</button></div></form></div>
-          <details><summary>Calibração com peso conhecido</summary><p class="small muted">Tare o recipiente vazio, coloque uma massa de referência e informe apenas a massa adicionada. A calibração ajusta a conversão da leitura para gramas.</p><form id="calibration-form"><label for="reference">Massa de referência <span>(g)</span></label><div class="input-action"><input id="reference" type="number" min="0.01" max="5000" step="any" value="500" required><button type="submit" class="button outline" data-stable-control>Calibrar</button></div></form><div class="calibration-actions"><p id="calibration-status" class="small muted">Escala nominal, sem calibração de referência.</p><button id="reset-calibration-button" type="button" class="button outline" data-preparation-control>Resetar calibração</button></div></details>
+        <div class="sample-section"><h3>Peso por amostra</h3><p class="small muted">Coloque peças conhecidas e informe a quantidade.</p><form id="sample-form"><label for="sample-count">Peças na amostra</label><div class="input-action"><input id="sample-count" type="number" min="1" max="1000000" step="1" value="10" required><button type="submit" class="button outline" data-stable-control>Aprender peso</button></div></form></div>
+          <details><summary>Calibrar balança</summary><p class="small muted">Use uma massa conhecida sobre o recipiente tarado.</p><form id="calibration-form"><label for="reference">Massa conhecida <span>(g)</span></label><div class="input-action"><input id="reference" type="number" min="0.01" max="5000" step="any" value="500" required><button type="submit" class="button outline" data-stable-control>Calibrar</button></div></form><div class="calibration-actions"><p id="calibration-status" class="small muted">Escala nominal.</p><button id="reset-calibration-button" type="button" class="button outline" data-preparation-control>Resetar calibração</button></div></details>
       </section>
     </div>
 
-    <section id="history" class="history-card" aria-labelledby="history-title">
+    <section id="history" class="history-card admin-only" aria-labelledby="history-title">
       <div class="section-title"><h2 id="history-title">Registro de movimentações</h2><label class="history-filter" for="history-material">Material <select id="history-material"><option value="">Material atual</option><option value="all">Todos os materiais</option></select></label></div>
       <div class="table-scroll"><table><thead><tr><th>Data e hora</th><th>Material</th><th>Movimentação</th><th>Variação</th><th>Estoque resultante</th></tr></thead><tbody id="events"><tr><td colspan="5" class="empty">O histórico começa ao iniciar o monitoramento.</td></tr></tbody></table></div>
       <div class="history-footer"><span>Até 100 eventos recentes · horários locais</span><span>Ajustes de medição não entram como consumo.</span></div>
@@ -98,7 +99,7 @@
         <div class="chart-container"><canvas id="stock-chart" role="img" aria-label="Gráfico das quantidades estáveis nos últimos dois minutos"></canvas><p id="chart-empty" class="muted small">O gráfico aparece após as primeiras leituras estáveis.</p></div>
       </details>
     </section>
-    <details id="autonomy-example" class="autonomy-example">
+    <details id="autonomy-example" class="autonomy-example admin-only">
       <summary>Exemplo de cálculo da autonomia <span class="example-tag">Dados fictícios</span></summary>
       <p class="muted small">Dados fictícios, separados do estoque monitorado. Este exemplo não altera a balança nem o seu histórico.</p>
       <div id="example-error" class="error-banner" role="alert" hidden></div>
