@@ -1,8 +1,39 @@
+// O firmware físico usa HX711 e célula de carga por padrão.
+// O gerador do Wokwi sobrescreve esta configuração para usar o potenciômetro.
+#ifndef STOCKWEIGHT_PHYSICAL
+#define STOCKWEIGHT_PHYSICAL 1
+#endif
+
+// Integração opcional com o dashboard via MQTT.
+// Substitua os dois campos Wi-Fi antes de gravar no ESP32.
+#ifndef STOCKWEIGHT_MQTT
+#define STOCKWEIGHT_MQTT 1
+#endif
+#ifndef SW_MQTT_HOST
+#define SW_MQTT_HOST "test.mosquitto.org"
+#endif
+#ifndef SW_MQTT_PORT
+#define SW_MQTT_PORT 1883
+#endif
+#ifndef SW_MQTT_PREFIX
+#define SW_MQTT_PREFIX "stockweight/c7e3c689dfd36f59"
+#endif
+#ifndef SW_DEVICE_ID
+#define SW_DEVICE_ID "stockweight-wokwi-01"
+#endif
+#ifndef SW_WIFI_SSID
+#define SW_WIFI_SSID "JUNINHO 2.4"
+#endif
+#ifndef SW_WIFI_PASSWORD
+#define SW_WIFI_PASSWORD "ab301004"
+#endif
+
 // Firmware principal do StockWeight.
 // O programa lê a massa, processa a contagem e publica telemetria.
 #include "mass_source.h"
 #include "stock_engine.h"
 #include <esp_random.h>
+
 #ifdef STOCKWEIGHT_MQTT
 #include "mqtt_transport.h"
 StockMqttTransport network;  // Gerencia Wi-Fi, MQTT e as filas de comunicação.
@@ -16,9 +47,23 @@ constexpr const char* kDeviceId = "stockweight-wokwi-01";
 constexpr int kMassPin = 34;   // Entrada analógica da massa simulada.
 constexpr int kAlertPin = 26;  // LED vermelho de alerta de estoque baixo.
 constexpr int kFaultPin = 27;  // Botão que simula uma falha de leitura.
+#if STOCKWEIGHT_PHYSICAL
+constexpr uint32_t kSamplePeriodMs = 1000;  // O HX711 de 10 Hz precisa de tempo entre leituras.
+#else
+constexpr uint32_t kSamplePeriodMs = 100;
+#endif
+#if STOCKWEIGHT_PHYSICAL
+constexpr int kHx711DoutPin = 18;  // DT/DOUT do HX711.
+constexpr int kHx711SckPin = 19;   // SCK do HX711.
+constexpr double kPhysicalGramsPerRaw = 0.0025977;  // Calibração obtida com 182 g.
+#endif
 // Fonte de massa atual: potenciômetro no Wokwi.
 // No protótipo físico, esta camada será substituída pela leitura do HX711.
+#if STOCKWEIGHT_PHYSICAL
+Hx711MassSource source(kHx711DoutPin, kHx711SckPin);
+#else
 PotentiometerMassSource source(kMassPin);  // Fonte atual de massa.
+#endif
 stockweight::StockEngine engine;           // Regras de tara, calibração e estoque.
 stockweight::CommandProcessor commands(engine);  // Interpreta comandos recebidos.
 String serialLine;                         // Buffer do comando serial atual.
@@ -64,6 +109,10 @@ void setup() {
   session = id;
   // O dispositivo inicia em preparação para evitar movimentações falsas.
   engine.prepare("boot-preparation");
+#if STOCKWEIGHT_PHYSICAL
+  // Aplica o fator medido antes de começar a receber as amostras físicas.
+  engine.setInitialCalibration(kPhysicalGramsPerRaw);
+#endif
   serialLine.reserve(192);
 #ifdef STOCKWEIGHT_MQTT
   network.begin(session);
@@ -75,10 +124,15 @@ void setup() {
 void loop() {
   const uint32_t now = millis();
   // Faz uma amostragem a cada 100 ms e atualiza o LED de alerta.
-  if (now - lastSample >= 100) {
+  if (now - lastSample >= kSamplePeriodMs) {
     lastSample = now;
     const MassReading reading = source.read();
+    // O botão de falha só existe no circuito do Wokwi.
+#if STOCKWEIGHT_PHYSICAL
+    engine.sample(reading.raw, reading.valid, now);
+#else
     engine.sample(reading.raw, reading.valid && digitalRead(kFaultPin) == HIGH, now);
+#endif
     digitalWrite(kAlertPin, engine.alert() ? HIGH : LOW);
   }
   // Lê comandos pela serial, uma linha por vez, com proteção contra excesso.

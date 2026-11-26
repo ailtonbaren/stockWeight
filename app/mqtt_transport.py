@@ -64,7 +64,9 @@ def validate_telemetry(message, device_id):
         raise ValueError("Configuração ausente.")
     numeric(settings.get("unit_g"), low=0.01, high=5000)
     numeric(settings.get("grams_per_raw"), low=0.000001, high=10000)
-    numeric(settings.get("tare_raw"), low=0, high=4095)
+    # O HX711 é um ADC de 24 bits; leituras físicas podem ficar bem acima de
+    # 4095 (por exemplo ~77000). O limite antigo rejeitava a tara real.
+    numeric(settings.get("tare_raw"), low=0, high=1000000000)
     integer(settings.get("minimum"), 0, 1000000)
     if any(type(settings.get(key)) is not bool for key in ("tare_set", "calibrated")):
         raise ValueError("Estado de calibração inválido.")

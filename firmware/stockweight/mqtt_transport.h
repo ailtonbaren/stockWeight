@@ -10,6 +10,13 @@
 #include <cstring>
 #include <string>
 
+#ifndef SW_WIFI_SSID
+#define SW_WIFI_SSID "Wokwi-GUEST"
+#endif
+#ifndef SW_WIFI_PASSWORD
+#define SW_WIFI_PASSWORD ""
+#endif
+
 // Esta tarefa é a única dona do Wi-Fi e do PubSubClient.
 // Ela não acessa o StockEngine: comandos e telemetrias atravessam filas FreeRTOS.
 class StockMqttTransport {
@@ -121,9 +128,8 @@ class StockMqttTransport {
     client_.setCallback([this](char* topic, uint8_t* payload, unsigned int length) { receive(topic, payload, length); });
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
-    // Rede pública simulada do Wokwi; no hardware real serão usadas credenciais reais.
-    WiFi.begin("Wokwi-GUEST", "", 6);
-    log("Conectando ao Wi-Fi Wokwi-GUEST.");
+    WiFi.begin(SW_WIFI_SSID, SW_WIFI_PASSWORD);
+    Serial.printf("{\"type\":\"network\",\"message\":\"Conectando ao Wi-Fi %s.\"}\n", SW_WIFI_SSID);
     uint32_t lastAttempt = millis() - 5000;
     const std::string clientId = std::string("sw-") + session_;
     const std::string offline = availability(false);

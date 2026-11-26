@@ -37,7 +37,7 @@ class StockEngine {
     if (!validUnit(value.unit_g) || value.minimum < 0 || value.minimum > 1000000 ||
         !std::isfinite(value.grams_per_raw) || value.grams_per_raw <= 0 ||
         value.grams_per_raw > 10000 || !std::isfinite(value.tare_raw) ||
-        value.tare_raw < 0 || value.tare_raw > 4095) {
+        value.tare_raw < 0 || value.tare_raw > 1000000000.0) {
       return {false, "Parâmetros persistidos inválidos."};
     }
     settings_ = value;
@@ -47,9 +47,12 @@ class StockEngine {
 
   // Recebe uma amostra do sensor e atualiza estabilidade, massa e quantidade.
   void sample(double raw, bool valid, uint32_t now_ms) {
-    if (static_cast<uint32_t>(now_ms - now_ms_) > 500) clearWindow();
+    // O modo físico amostra aproximadamente a cada segundo; não descarte a
+    // janela de estabilidade entre duas leituras normais do HX711.
+    if (static_cast<uint32_t>(now_ms - now_ms_) > 3000) clearWindow();
     now_ms_ = now_ms;
-    valid_ = valid && std::isfinite(raw) && raw >= 0 && raw <= 4095;
+    // O potenciômetro usa 0..4095, mas o HX711 entrega contagens maiores.
+    valid_ = valid && std::isfinite(raw) && raw >= 0;
     if (!valid_) {
       clearWindow();
       return;
@@ -65,7 +68,9 @@ class StockEngine {
       if (samples_[i] > high) high = samples_[i];
     }
     raw_ = total / count_;
-    const double tolerance_g = std::fmax(0.25, std::fmin(1.5, settings_.unit_g * 0.25));
+    // Células físicas têm mais ruído que o potenciômetro simulado; toleramos
+    // uma pequena variação sem aceitar oscilações grandes como estáveis.
+    const double tolerance_g = std::fmax(0.5, std::fmin(3.0, settings_.unit_g * 0.5));
     // A removed container must not become a withdrawal of the entire stock.
     container_present_ = (raw - settings_.tare_raw) * settings_.grams_per_raw >= -tolerance_g;
     stable_ = container_present_ && count_ == kWindowSize &&
@@ -102,11 +107,14 @@ class StockEngine {
 
   // Registra o peso atual do recipiente como zero da medição líquida.
   Result tare() {
-    if (!valid_ || !stable_) return {false, "Aguarde uma leitura estável antes de tarar."};
-    settings_.tare_raw = last_stable_raw_;
+    // A tara é uma ação manual: o operador decide quando a leitura ficou
+    // suficientemente parada. Não bloqueie o comando por causa da janela
+    // automática de estabilidade.
+    if (!valid_ || !std::isfinite(raw_)) return {false, "Aguardando uma leitura válida para tarar."};
+    settings_.tare_raw = raw_;
     settings_.tare_set = true;
     resetBaseline();
-    return {true, "Tara aplicada. Aguarde a estabilização."};
+    return {true, "Tara aplicada."};
   }
 
   // Inicia uma nova medição sem registrar movimentações no histórico.
@@ -170,6 +178,17 @@ class StockEngine {
     settings_.calibrated = false;
     resetBaseline();
     return {true, "Calibração resetada. A escala voltou ao fator nominal."};
+  }
+
+  // Define uma calibração inicial medida fora do fluxo do dashboard.
+  // O usuário ainda pode recalibrar depois usando um peso conhecido.
+  Result setInitialCalibration(double grams_per_raw) {
+    if (!std::isfinite(grams_per_raw) || grams_per_raw <= 0 || grams_per_raw > 10000)
+      return {false, "Fator de calibração inicial inválido."};
+    settings_.grams_per_raw = grams_per_raw;
+    settings_.calibrated = true;
+    resetBaseline();
+    return {true, "Calibração física inicial aplicada."};
   }
 
   // Define manualmente o peso médio de uma peça.

@@ -36,7 +36,10 @@ function controls() {
   const online = Boolean(current?.connected) && !busy && Boolean(current?.workflow?.ready) && choiceMatches;
   const stable = online && Boolean(current?.telemetry?.stable);
   const preparing = current?.workflow?.phase === "preparing";
-  $("tare-button").disabled = !stable || !preparing;
+  // Tara é manual: habilite assim que houver uma leitura válida, sem exigir
+  // que a janela automática declare stable=true.
+  const tareReady = online && preparing && Boolean(current?.telemetry?.valid);
+  $("tare-button").disabled = !tareReady;
   $("reset-tare-button").disabled = !online || !current?.telemetry?.settings?.tare_set;
   $("reset-calibration-button").disabled = !online || !preparing || !current?.telemetry?.settings?.calibrated;
   $("prepare-button").disabled = !current?.connected || busy || !current?.workflow?.supported;
@@ -128,15 +131,13 @@ function render(data) {
     const settings = reading.settings;
     const quantity = online && flow.unit_ready && settings.tare_set ? reading.quantity : null;
     const stable = online && reading.stable;
-    let status = "Estoque normal", style = "normal", hint = "Quantidade confirmada após estabilização da leitura.";
+    let status = "Estoque normal", style = "normal", hint = "Leitura recebida do ESP32.";
     if (!online) {
       status = "Sem conexão"; style = "neutral"; hint = "A última leitura foi preservada. Reconecte para atualizar o estoque.";
     } else if (!reading.valid) {
       status = "Falha de leitura"; style = "alert"; hint = "Leitura inválida. O histórico não registra movimentações durante a falha.";
     } else if (!reading.container_present) {
       status = "Recipiente ausente"; style = "neutral"; hint = "Massa abaixo da tara. Aguardando o retorno do recipiente.";
-    } else if (!stable) {
-      status = "Estabilizando"; style = "neutral"; hint = "Aguarde cerca de 1 segundo. Oscilações não geram movimentações.";
     } else if (flow.phase === "preparing") {
       status = "Estimativa de teste"; style = "neutral"; hint = "Confira o lote e clique em Iniciar monitoramento. Nenhuma movimentação é registrada nesta etapa.";
       if (!settings.tare_set) { status = "Tare o recipiente"; hint = flow.message; }
@@ -148,7 +149,7 @@ function render(data) {
     $("stock-status").textContent = status;
     $("stock-status").className = `pill ${style}`;
     $("stock-hint").textContent = hint;
-    $("stability").textContent = stable ? "Leitura estável" : "Leitura não confirmada";
+    $("stability").textContent = online ? "Leitura recebida" : "Leitura não disponível";
     $("minimum-label").textContent = `${format(settings.minimum)} peças`;
     $("unit-label").textContent = flow.unit_ready ? `${format(settings.unit_g, 3)} g` : "A definir";
     $("net").textContent = online ? format(reading.net_g, 1) : "—";
@@ -165,7 +166,7 @@ function render(data) {
     for (const id of ["quantity", "net", "gross", "tare", "unit-label", "minimum-label"]) $(id).textContent = "—";
     $("stock-status").textContent = "Aguardando leitura";
     $("stock-status").className = "pill neutral";
-    $("stability").textContent = "Leitura não confirmada";
+    $("stability").textContent = "Leitura não disponível";
     $("stock-hint").textContent = mqttMode ? "Inicie a simulação no Wokwi e aguarde uma leitura recente." : "Aguarde uma leitura estável para confirmar o estoque.";
     $("stock-meter").value = 0;
     $("virtual-led").classList.remove("on");

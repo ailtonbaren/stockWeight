@@ -337,7 +337,7 @@ class Application:
         elif monitoring:
             message = "Monitoramento ativo. As mudanças estáveis são registradas para este material."
         elif not settings.get("tare_set"):
-            message = "Coloque somente o recipiente vazio, aguarde estabilizar e tare a balança."
+            message = "Coloque somente o recipiente vazio e clique em Tarar balança quando a leitura parecer parada."
         elif not unit_ready:
             message = "Pese uma amostra conhecida e informe a quantidade, ou salve a massa por peça."
         elif not reading.get("stable"):
@@ -655,7 +655,7 @@ def main():
         print(f"StockWeight: http://localhost:{server.server_port}", flush=True)
         if args.mode == "mqtt":
             print(f"Modo MQTT: {application.mqtt_config.host}:{application.mqtt_config.port}", flush=True)
-            print(f"Tópicos: {application.mqtt_config.topic}/… — aguardando o ESP32 no Wokwi.", flush=True)
+            print(f"Tópicos: {application.mqtt_config.topic}/… — aguardando o ESP32.", flush=True)
         else:
             print("Modo: simulador local. Use --mode mqtt para conectar ao Wokwi.", flush=True)
         try:
